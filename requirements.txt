@@ -1,0 +1,27 @@
+# Core scientific computing and data manipulation
+numpy
+pandas
+scipy
+
+# Machine learning and deep learning
+
+scikit-learn
+
+# Computer vision and image processing
+opencv-python
+pillow
+matplotlib
+
+# Data storage and handling
+h5py
+hdf5plugin
+
+# Specialized packages
+CRPS
+timm
+
+
+
+# Additional utilities
+tqdm
+tensorboard

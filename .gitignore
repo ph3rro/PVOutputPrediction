@@ -1,0 +1,12 @@
+/data
+/pytorch_env
+testnotebook.ipynb
+video_prediction_224_testing.h5
+dummyfile.h5
+/data
+/repetitions
+/variables
+.ipynb_checkpoints/UNet_sky_image_PV_mapping-checkpoint.ipynb
+model_output/UNet_sky_image_PV_mapping/train_loss_hist.npy
+Sky_video_pv_mapping.ipynb
+video_prediction_224_second.h5
