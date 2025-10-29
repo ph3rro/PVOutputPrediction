@@ -1,0 +1,3 @@
+[submodule "models/VideoMAEv2"]
+	path = models/VideoMAEv2
+	url = https://github.com/OpenGVLab/VideoMAEv2
