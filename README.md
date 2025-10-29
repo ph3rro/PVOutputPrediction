@@ -14,7 +14,7 @@ Data preprocessing scripts for sky-video-PV pairs and modified VideoMAEv2 for re
 ## Step 1: Clone the Repository
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/ph3rro/PVOutputPrediction
 cd PVOutputPrediction
 ```
 ## Step 1b: Initialize Git Submodules
@@ -24,12 +24,6 @@ The VideoMAEv2 model is included as a git submodule. Initialize and fetch it:
 ```bash
 git submodule init
 git submodule update
-```
-
-**Alternative:** Clone with submodules in one step:
-```bash
-git clone --recurse-submodules <your-repository-url>
-cd PVOutputPrediction
 ```
 
 ## Step 2: Create Virtual Environment
