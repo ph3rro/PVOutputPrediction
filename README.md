@@ -8,7 +8,7 @@ Data preprocessing scripts for sky-video-PV pairs and modified VideoMAEv2 for re
 
 - Python 3.13
 - NVIDIA GPU with CUDA support (recommended for training)
-- CUDA 12.8 or compatible version
+- CUDA 12.6+ (version compatible with Pytorch)
 - Git
 
 ## Step 1: Clone the Repository
@@ -54,7 +54,7 @@ Install PyTorch first, as it requires specific CUDA versions. Visit [PyTorch Get
 
 For CUDA 12.8 (as used in this project):
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
 
 For CPU-only (not recommended for training):
