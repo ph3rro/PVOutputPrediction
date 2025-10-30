@@ -17,50 +17,49 @@ Data preprocessing scripts for sky-video-PV pairs and modified VideoMAEv2 for re
 git clone https://github.com/ph3rro/PVOutputPrediction
 cd PVOutputPrediction
 ```
-## Step 1b: Initialize Git Submodules
 
-The VideoMAEv2 model is included as a git submodule. Initialize and fetch it:
+## Step 2: Create Virtual Environments
+
+Install Python 3.13 and add to PATH.
+
+You will need two separate virtual environments—one for the preprocessing notebooks and one for VideoMAEv2
 
 ```bash
-git submodule init
-git submodule update
+python3.13 -m venv preprocessing-env
+cd models/VideoMAEv2
+python3.13 -m venv VideoMAE-env
 ```
 
-## Step 2: Create Virtual Environment
+## Step 3: Install PyTorch with CUDA Support 
 
-It's recommended to use a virtual environment to avoid dependency conflicts.
+Install PyTorch first (on both environments), as it requires specific CUDA versions. Visit [PyTorch Get Started](https://pytorch.org/get-started/locally/) to get the appropriate command for your system.
 
-### Windows
-```bash
-python -m venv pytorch_env
-pytorch_env\Scripts\activate
-```
-
-### Linux/macOS
-```bash
-python -m venv pytorch_env
-source pytorch_env/bin/activate
-```
-
-## Step 3: Install PyTorch with CUDA Support
-
-Install PyTorch first, as it requires specific CUDA versions. Visit [PyTorch Get Started](https://pytorch.org/get-started/locally/) to get the appropriate command for your system.
-
-For CUDA 12.8 (as used in this project):
+For CUDA 13.0 (as used in this project):
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
-```
-
-For CPU-only (not recommended for training):
-```bash
-pip install torch torchvision torchaudio
 ```
 
 ## Step 4: Install Core Dependencies
 
 Install the main project dependencies:
+
+### Windows
 ```bash
+preprocessing-env\Scripts\activate
 pip install -r requirements.txt
+cd models/VideoMAEv2
+VideoMAE-env\Scripts\activate
+pip install -r requirements-MAE.txt
+```
+
+### Linux 
+
+```bash
+source preprocessing-env/bin/activate
+pip install -r requirements.txt
+cd models/VideoMAEv2
+preprocessing-env/bin/activate
+pip install -r requirements-MAE.txt
 ```
 
 This will install:
