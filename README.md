@@ -41,12 +41,13 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ## Step 4: Install Core Dependencies
 
-Install the main project dependencies:
+Install the main project dependencies in two separate virtual environments for preprocessing notebooks and VideoMAE:
 
 ### Windows
 ```bash
 preprocessing-env\Scripts\activate
 pip install -r requirements.txt
+deactivate
 cd models/VideoMAEv2
 VideoMAE-env\Scripts\activate
 pip install -r requirements-MAE.txt
@@ -57,6 +58,7 @@ pip install -r requirements-MAE.txt
 ```bash
 source preprocessing-env/bin/activate
 pip install -r requirements.txt
+deactivate
 cd models/VideoMAEv2
 preprocessing-env/bin/activate
 pip install -r requirements-MAE.txt
@@ -70,23 +72,7 @@ This will install:
 - Utilities: CRPS, tqdm, tensorboard, matplotlib
 - Jupyter notebook support
 
-## Step 5: Install VideoMAE Dependencies (Optional)
-
-If you plan to use the VideoMAE models for video-based prediction:
-
-```bash
-cd models/VideoMAEv2
-pip install -r requirements-MAE.txt
-cd ../..
-```
-
-Key VideoMAE dependencies include:
-- decord (for video processing)
-- einops
-- av (PyAV for video I/O)
-- timm (PyTorch Image Models)
-
-## Step 6: Verify Installation
+## Step 5: Verify Installation
 
 Check that PyTorch can access your GPU:
 
