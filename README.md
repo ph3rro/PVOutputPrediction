@@ -103,11 +103,15 @@ if torch.cuda.is_available():
 
 ## Finetuning
 
-### Windows
+### CUDA
 ```bash
 python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --mixup=0 --cutmix=0
 ```
-### Linux 
+
+### CPU (not recommended)
+```bash
+python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --mixup=0 --cutmix=0 --device='cpu'
+```
 
 ## Pretraining
 
