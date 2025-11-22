@@ -100,7 +100,7 @@ def train_one_epoch(model: torch.nn.Module,
                                              criterion)
 
         else:
-            with torch.amp.autocast("cuda",dtype=torch.bfloat16): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
+            with torch.amp.autocast(device.type,dtype=torch.bfloat16): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
                 #print("pv_preds before 2nd:", pv_preds)
                 loss, output = train_class_batch(model, image_logs, pv_logs, pv_preds,
                                                  criterion)
@@ -145,8 +145,8 @@ def train_one_epoch(model: torch.nn.Module,
                     model_ema.update(model)
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
-        torch.cuda.synchronize()
-
+        if device.type=="cuda":
+            torch.cuda.synchronize()
         if mixup_fn is None:
             class_acc = (output.max(-1)[-1] == pv_preds).float().mean()
         else:
@@ -208,7 +208,7 @@ def validation_one_epoch(data_loader, model, device):
         pv_log = pv_log.to(device, non_blocking=True)
 
         # compute output
-        with torch.amp.autocast("cuda"): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
+        with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
             output = model(images, pv_log)
             loss = criterion(output.squeeze(-1), pv_pred)
 
@@ -273,7 +273,7 @@ def final_test(data_loader, model, device, file):
         target = target.to(device, non_blocking=True)
 
         # compute output
-        with torch.amp.autocast("cuda"): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
+        with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
             output = model(images, pv_log)
             loss = criterion(output.squeeze(-1), target)
 
