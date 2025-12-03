@@ -60,7 +60,7 @@ source preprocessing-env/bin/activate
 pip install -r requirements.txt
 deactivate
 cd models/VideoMAEv2
-preprocessing-env/bin/activate
+source VideoMAE-env/bin/activate
 pip install -r requirements-MAE.txt
 ```
 
