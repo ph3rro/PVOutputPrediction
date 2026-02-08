@@ -300,16 +300,11 @@ def get_args():
         default='D:/PVOutputPrediction/preprocessing/data/video_prediction_224_testing.h5',
         type=str,
         help='HDF5 dataset path')
-    parser.add_argument( # We aren't using this for now (finetuning) since we have h5 files instead of csv files
-        '--trainval_data_path',
-        default='/your/data/path/',
-        type=str,
-        help='trainval dataset path')
     parser.add_argument(
-        '--test_data_path',
+        '--data_path',
         default='/your/data/path/',
         type=str,
-        help='test dataset path')
+        help='path to folder containing trainval and test videos + metadata')
     parser.add_argument(
         '--data_root', default='', type=str, help='dataset path root')
     parser.add_argument(
