@@ -13,6 +13,7 @@ from .loader import get_image_loader, get_video_loader
 from .random_erasing import RandomErasing
 import h5py
 from .pvhelperfunctions import cv_split_holdout, day_block_shuffle
+import ast
 
 # preprocessing_folder = "D:/PVOutputPrediction/preprocessing/"
 # cwd = os.getcwd()
@@ -25,7 +26,10 @@ class PVRegressionDataset(Dataset):
 
     def __init__(self,
                  # anno_path, 
-                 data_path = "D:/PVOutputPrediction/preprocessing/data/video_prediction_224_testing.h5", # HDF5 file path
+                 use_h5 = False,
+                 h5_path = "",
+                 trainval_data_path = "",
+                 test_data_path = "",
                  data_root='',
                  mode='train',
                  clip_len=16,
@@ -41,7 +45,10 @@ class PVRegressionDataset(Dataset):
                  test_num_crop=3,
                  sparse_sample=False, # arent using 
                  args=None):
-        self.data_path = data_path
+        self.use_h5 = use_h5
+        self.h5_path = h5_path
+        self.trainval_data_path = trainval_data_path
+        self.test_data_path = test_data_path
         self.data_root = data_root
         self.mode = mode
         self.clip_len = clip_len
@@ -65,13 +72,6 @@ class PVRegressionDataset(Dataset):
             if self.args.reprob > 0:
                 self.rand_erase = True
 
-        #self.video_loader = get_video_loader()
-
-        # cleaned = pd.read_csv(self.anno_path, header=None, delimiter=' ')
-        # self.dataset_samples = list(
-        #     cleaned[0].apply(lambda row: os.path.join(self.data_root, row)))
-        # self.label_array = list(cleaned.values[:, 1])
-        print(self.data_path)
 
 
         '''try:
@@ -99,16 +99,45 @@ class PVRegressionDataset(Dataset):
             print("\nThis likely confirms the virtual source files are missing or paths are incorrect.")
         except KeyError:
             print("Dataset 'trainval/image_log' not found in the HDF5 file.")'''
-        f = h5py.File(self.data_path, 'r')
-        
+        if self.use_h5:
+            f = h5py.File(self.h5_path, 'r')
+            image_log_trainval = f['trainval/image_log']
+            pv_log_trainval = f['trainval/pv_log']
+            pv_pred_trainval = f['trainval/pv_pred']
+            image_log_test = f['test/image_log']
+            pv_log_test = f['test/pv_log']
+            pv_pred_test = f['test/pv_pred']
+        else:
+            self.video_loader = get_video_loader()
+            cleaned = pd.read_parquet(self.trainval_data_path) #changed to parquet
+            trainval_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy() 
+            #self.label_array = list(cleaned.values[:, 1])
+            times_trainval = list(cleaned.values[:, 1])
+            #print("type, ", type(cleaned.values[:,2][6]))
+            pv_log_trainval = np.array(cleaned.iloc[:, 2]) # change to parquet PLEASE
+            pv_pred_trainval = np.array(cleaned.iloc[:, 3])
+            
+            cleaned = pd.read_parquet(self.test_data_path) #changed to parquet
+            test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
+            #self.label_array = list(cleaned.values[:, 1])
+            times_test = list(cleaned.values[:, 1])
+            #print("type, ", type(cleaned.values[:,2][6]))
+            pv_log_test = np.array(cleaned.iloc[:, 2]) # change to parquet PLEASE
+            pv_pred_test = np.array(cleaned.iloc[:, 3])
         #print(f['trainval/image_log'][0])
         #print(f['trainval/pv_log'])
         #print(f['trainval/pv_pred'])
         
+        indices_dayblock_shuffled = day_block_shuffle(times_trainval)
+        train_indices, val_indices = cv_split_holdout(indices_dayblock_shuffled, train_ratio = 0.9)
+        if use_h5:
+            image_log_train, image_log_val = image_log_trainval[train_indices], image_log_trainval[val_indices]
+        else:
+            dataset_samples_train = trainval_dataset_samples[train_indices]
+            dataset_samples_val = trainval_dataset_samples[val_indices]
 
-        image_log_train, image_log_val = cv_split_holdout(f['trainval/image_log'], train_ratio = 0.9)
-        pv_log_train, pv_log_val = cv_split_holdout(f['trainval/pv_log'], train_ratio = 0.9)
-        pv_pred_train, pv_pred_val = cv_split_holdout(f['trainval/pv_pred'], train_ratio = 0.9)
+        pv_log_train, pv_log_val = pv_log_trainval[train_indices], pv_log_trainval[val_indices]
+        pv_pred_train, pv_pred_val = pv_pred_trainval[train_indices], pv_pred_trainval[val_indices]
         
         # temporary testing
         #image_log_train = image_log_train[1000:1100]
@@ -116,12 +145,19 @@ class PVRegressionDataset(Dataset):
         #pv_pred_train = pv_pred_train[1000:1100]
 
         if (mode == 'train'):
-            self.image_log = image_log_train
+            if use_h5:
+                self.image_log = image_log_train
+            else:
+                self.dataset_samples = dataset_samples_train
             self.pv_log = pv_log_train      
             self.pv_pred = pv_pred_train
 
         elif (mode == 'validation'):
-            self.image_log = image_log_val
+            
+            if use_h5:
+                self.image_log = image_log_val
+            else:
+                self.dataset_samples = dataset_samples_val
             self.pv_log = pv_log_val
             self.pv_pred = pv_pred_val
             '''self.data_transform = video_transforms.Compose([
@@ -134,9 +170,12 @@ class PVRegressionDataset(Dataset):
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])'''
         elif mode == 'test':
-            self.image_log = f['test/image_log']
-            self.pv_log = f['test/pv_log']
-            self.pv_pred = f['test/pv_pred']
+            if use_h5:
+                self.image_log = image_log_test
+            else:
+                self.dataset_samples = test_dataset_samples
+            self.pv_log = pv_log_test
+            self.pv_pred = pv_pred_test
             self.data_resize = video_transforms.Compose([
                 video_transforms.Resize(
                     size=(short_side_size), interpolation='bilinear')
@@ -160,12 +199,18 @@ class PVRegressionDataset(Dataset):
     def __getitem__(self, index):
         if self.mode == 'train':
             args = self.args
-            '''
             scale_t = 1
+            if self.use_h5:
+                buffer = self.image_log[index]
+            else:
+                sample = self.dataset_samples[index]  # this refers to the path of the video
+                #hardcoding below for now PLEASE CHANGE 
+                buffer = self.load_video(os.path.join('D:/PVOutputPrediction/preprocessing/data/data_forecast/videos_trainval',sample), sample_rate_scale=scale_t)
+            
 
-            #sample = self.dataset_samples[index] # this refers to the path of the video
+            #sample = self.dataset_samples[index]
 
-            # T H W C
+            '''# T H W C
             #buffer = self.load_video(sample, sample_rate_scale=scale_t) # this returns the frames of the video given the path with a list of numpy arrays
             # ALL OUR DATA IS GUARANTEED TO BE 16 FRAMES LONG SO WE DON'T NEED TO CHECK THE LENGTH
             if len(buffer) == 0:
@@ -176,8 +221,9 @@ class PVRegressionDataset(Dataset):
                     index = np.random.randint(self.__len__())
                     sample = self.dataset_samples[index]
                     buffer = self.load_video(sample, sample_rate_scale=scale_t)
-'''
-            buffer = self.image_log[index]
+
+            buffer = self.image_log[index]'''
+            buffer = np.array(buffer)
             if args.num_sample > 1: # multi thread
                 frame_list = []
                 label_list = []
@@ -202,21 +248,12 @@ class PVRegressionDataset(Dataset):
             
 
         elif self.mode == 'validation':
-            #sample = self.dataset_samples[index]
-            #buffer = self.load_video(sample)
+            if self.use_h5:
+                buffer = self.image_log[index]
+            else:
+                sample = self.dataset_samples[index]
+                buffer = self.load_video(sample)
             args = self.args
-            '''if len(buffer) == 0:
-                while len(buffer) == 0:
-                    warnings.warn(
-                        "video {} not correctly loaded during validation".
-                        format(sample))
-                    index = np.random.randint(self.__len__())
-                    sample = self.dataset_samples[index]
-                    buffer = self.load_video(sample)
-            buffer = self.data_transform(buffer)
-            return buffer, self.label_array[index], sample.split(
-                "/")[-1].split(".")[0]''' 
-            buffer = self.image_log[index]
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 to match model dtype (same as training)
             pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
@@ -360,22 +397,18 @@ class PVRegressionDataset(Dataset):
         length = len(vr)
 
         if self.mode == 'test':
-            all_index = [
-                x for x in range(0, length, self.frame_sample_rate)
-            ]
-            while len(all_index) < self.clip_len:
-                all_index.append(all_index[-1])
+            all_index = list(range(self.clip_len))
 
             vr.seek(0)
             buffer = vr.get_batch(all_index).asnumpy()
             return buffer
 
         # handle temporal segments
-        converted_len = int(self.clip_len * self.frame_sample_rate)
-        seg_len = length // self.num_segment
+        #converted_len = int(self.clip_len * self.frame_sample_rate)
+        #seg_len = length // self.num_segment
         # for the PV output regression since all our data is 16 frames we dont need below code, we should set clip_len to 16
-        all_index = []
-        for i in range(self.num_segment):
+        #all_index = []
+        '''for i in range(self.num_segment):
             if seg_len <= converted_len: # if the number of frames in the video is <= than the number of frames of video needed to have clip_len frames given sample_rate
                 index = np.linspace(
                     0, seg_len, num=seg_len // self.frame_sample_rate)
@@ -393,16 +426,19 @@ class PVRegressionDataset(Dataset):
                 index = np.linspace(str_idx, end_idx, num=self.clip_len)
                 index = np.clip(index, str_idx, end_idx - 1).astype(np.int64)
             index = index + i * seg_len
-            all_index.extend(list(index))
+            all_index.extend(list(index))'''
 
-        all_index = all_index[::int(sample_rate_scale)]
+        #all_index = all_index[::int(sample_rate_scale)]
+        all_index = list(range(self.clip_len))
         vr.seek(0)
         buffer = vr.get_batch(all_index).asnumpy()
         return buffer
 
     def __len__(self):
-        return len(self.image_log)
-
+        try:
+            return len(self.pv_log)
+        except:
+            return len(self.dataset_samples)
 
 class VideoClsDataset(Dataset):
     """Load your own video classification dataset."""
@@ -505,7 +541,6 @@ class VideoClsDataset(Dataset):
                     index = np.random.randint(self.__len__())
                     sample = self.dataset_samples[index]
                     buffer = self.load_video(sample, sample_rate_scale=scale_t)
-
             if args.num_sample > 1:
                 frame_list = []
                 label_list = []

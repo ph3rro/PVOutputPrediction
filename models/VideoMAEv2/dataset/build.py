@@ -39,16 +39,18 @@ def build_pretraining_dataset(args):
 def build_dataset(is_train, test_mode, args):
     if is_train:
         mode = 'train'
-        anno_path = os.path.join(args.data_path, 'train.csv') # we don't need this but since code references it I'm keeping it uncommented
+        #anno_path = os.path.join(args.data_path, 'train.csv') # we don't need this but since code references it I'm keeping it uncommented
     elif test_mode:
         mode = 'test'
-        anno_path = os.path.join(args.data_path, 'val.csv') # we don't need this but since code references it I'm keeping it uncommented
+        #anno_path = os.path.join(args.data_path, 'val.csv') # we don't need this but since code references it I'm keeping it uncommented
     else:
         mode = 'validation'
-        anno_path = os.path.join(args.data_path, 'val.csv') # we don't need this but since code references it I'm keeping it uncommented
+        #anno_path = os.path.join(args.data_path, 'val.csv') # we don't need this but since code references it I'm keeping it uncommented
     if args.data_set == 'PVOutputPrediction':
         dataset = PVRegressionDataset(
-            data_path=args.h5_path,
+            h5_path=args.h5_path,
+            trainval_data_path=args.trainval_data_path,
+            test_data_path=args.test_data_path,
             data_root=args.data_root,
             mode=mode,
             clip_len=args.num_frames,

@@ -313,14 +313,14 @@ class PvEmbed(nn.Module):
         
         # A simple MLP to create the embeddings
         self.pv_embedder = nn.Sequential(
-            nn.Linear(2, 128),      # Project from 2 PV values to a hidden dim
+            nn.Linear(self.tubelet_size, 128),      # Project from 2 PV values to a hidden dim
             nn.GELU(),
             nn.Linear(128, self.embed_dim) # Project to the final embedding dim
         )
 
     def forward(self, x, **kwargs):
         B, T = x.shape
-        pv_data_reshaped = x.view(B, T//self.tubelet_size, 2)
+        pv_data_reshaped = x.view(B, T//self.tubelet_size, self.tubelet_size)
 
         # Create the PV tokens
         pv_tokens = self.pv_embedder(pv_data_reshaped)
@@ -440,6 +440,7 @@ class VisionTransformer(nn.Module):
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
+            trunc_normal_(self.pv_pos_embed, std=.02)
 
         self.apply(self._init_weights)
 
@@ -460,7 +461,7 @@ class VisionTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
+        return {'pos_embed', 'pv_pos_embed', 'cls_token'}
 
     def get_classifier(self):
         return self.head
@@ -480,7 +481,7 @@ class VisionTransformer(nn.Module):
         if self.pos_embed is not None:
             pos_embed = torch.cat((self.pos_embed, self.pv_pos_embed), dim=1)
             x = x + pos_embed.expand(B, -1, -1).type_as(x).to(
-                x.device).clone().detach()
+                x.device) # removed .clone().detach()
         x = self.pos_drop(x)
 
         for blk in self.blocks:

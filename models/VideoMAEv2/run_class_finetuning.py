@@ -301,10 +301,15 @@ def get_args():
         type=str,
         help='HDF5 dataset path')
     parser.add_argument( # We aren't using this for now (finetuning) since we have h5 files instead of csv files
-        '--data_path',
+        '--trainval_data_path',
         default='/your/data/path/',
         type=str,
-        help='dataset path')
+        help='trainval dataset path')
+    parser.add_argument(
+        '--test_data_path',
+        default='/your/data/path/',
+        type=str,
+        help='test dataset path')
     parser.add_argument(
         '--data_root', default='', type=str, help='dataset path root')
     parser.add_argument(
@@ -321,7 +326,7 @@ def get_args():
         '--imagenet_default_mean_and_std', default=True, action='store_true')
     parser.add_argument('--num_segments', type=int, default=1)
     parser.add_argument('--num_frames', type=int, default=16)
-    parser.add_argument('--sampling_rate', type=int, default=4)
+    parser.add_argument('--sampling_rate', type=int, default=1) # changed from 4 to 1
     parser.add_argument('--sparse_sample', default=False, action='store_true')
     parser.add_argument(
         '--data_set',
@@ -443,7 +448,8 @@ def main(args, ds_init):
     else:
         dataset_val, _ = build_dataset(
             is_train=False, test_mode=False, args=args)
-    dataset_test, _ = build_dataset(is_train=False, test_mode=True, args=args)
+    # making dataset test the same as others for testing temporarily PLEASE CHANGE BACK PLEASE LATER
+    dataset_test, _ = build_dataset(is_train=True, test_mode=False, args=args)
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()

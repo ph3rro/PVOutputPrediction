@@ -75,36 +75,24 @@ def cv_split_kfold(split_data, fold_index, num_fold):
 
     return data_train,data_val
 
-def cv_split_holdout(split_data, train_ratio = 0.9):
-    '''
-    input:
-    split_data: the dayblock shuffled indices to be splitted
-    val_ratio: the ratio of data to be used as validation
-    output:
-    data_train: the train data indices
-    data_val: the validation data indices
-    '''
-    # randomly divides into a training set and a validation set
+def cv_split_holdout(split_data, train_ratio=0.9):
+    split_data = np.asarray(split_data)
     num_samples = len(split_data)
-    print("num_samples: ", num_samples)
     indices = np.arange(num_samples)
 
-    # finding training and validation indices
-    train_mask = np.zeros(len(indices), dtype=bool)
-    train_mask[:int(train_ratio * num_samples)] = True
-    train_indices = indices[train_mask]
-    val_indices = indices[np.logical_not(train_mask)]
-
-    # shuffle indices
+    # Shuffle ALL indices first with a fixed seed
     np.random.seed(1)
-    np.random.shuffle(train_indices)
-    np.random.shuffle(val_indices)
+    np.random.shuffle(indices)
 
-    # HDF5 requires indices to be in increasing order for fancy indexing
-    data_train = split_data[sorted(train_indices)]
-    data_val = split_data[sorted(val_indices)]
+    # Then split the shuffled list
+    split_idx = int(train_ratio * num_samples)
+    train_indices = indices[:split_idx]
+    val_indices = indices[split_idx:]
 
-    return data_train,data_val
+    #data_train = split_data[train_indices]
+    #data_val = split_data[val_indices]
+
+    return train_indices, val_indices
 
 def mask_background(img, center_i = 108, center_j = 110, radius = 108, img_size = 224): # put all background pixels (the ones outside the circle region of sky images) to 0s
 	mask = torch.ones((3,img_size,img_size), dtype=bool)
