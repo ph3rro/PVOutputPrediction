@@ -28,8 +28,7 @@ class PVRegressionDataset(Dataset):
                  # anno_path, 
                  use_h5 = False,
                  h5_path = "",
-                 trainval_data_path = "",
-                 test_data_path = "",
+                 data_path = "",
                  data_root='',
                  mode='train',
                  clip_len=16,
@@ -47,8 +46,7 @@ class PVRegressionDataset(Dataset):
                  args=None):
         self.use_h5 = use_h5
         self.h5_path = h5_path
-        self.trainval_data_path = trainval_data_path
-        self.test_data_path = test_data_path
+        self.data_path = data_path
         self.data_root = data_root
         self.mode = mode
         self.clip_len = clip_len
@@ -109,20 +107,20 @@ class PVRegressionDataset(Dataset):
             pv_pred_test = f['test/pv_pred']
         else:
             self.video_loader = get_video_loader()
-            cleaned = pd.read_parquet(self.trainval_data_path) #changed to parquet
+            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_train")) #changed to parquet
             trainval_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy() 
             #self.label_array = list(cleaned.values[:, 1])
             times_trainval = list(cleaned.values[:, 1])
             #print("type, ", type(cleaned.values[:,2][6]))
-            pv_log_trainval = np.array(cleaned.iloc[:, 2]) # change to parquet PLEASE
+            pv_log_trainval = np.array(cleaned.iloc[:, 2])
             pv_pred_trainval = np.array(cleaned.iloc[:, 3])
             
-            cleaned = pd.read_parquet(self.test_data_path) #changed to parquet
+            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test")) #changed to parquet
             test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
             #self.label_array = list(cleaned.values[:, 1])
             times_test = list(cleaned.values[:, 1])
             #print("type, ", type(cleaned.values[:,2][6]))
-            pv_log_test = np.array(cleaned.iloc[:, 2]) # change to parquet PLEASE
+            pv_log_test = np.array(cleaned.iloc[:, 2]) 
             pv_pred_test = np.array(cleaned.iloc[:, 3])
         #print(f['trainval/image_log'][0])
         #print(f['trainval/pv_log'])
@@ -204,8 +202,7 @@ class PVRegressionDataset(Dataset):
                 buffer = self.image_log[index]
             else:
                 sample = self.dataset_samples[index]  # this refers to the path of the video
-                #hardcoding below for now PLEASE CHANGE 
-                buffer = self.load_video(os.path.join('D:/PVOutputPrediction/preprocessing/data/data_forecast/videos_trainval',sample), sample_rate_scale=scale_t)
+                buffer = self.load_video(os.path.join(data_path,"videos_trainval", sample), sample_rate_scale=scale_t)
             
 
             #sample = self.dataset_samples[index]
@@ -252,7 +249,7 @@ class PVRegressionDataset(Dataset):
                 buffer = self.image_log[index]
             else:
                 sample = self.dataset_samples[index]
-                buffer = self.load_video(sample)
+                buffer = self.load_video(os.path.join(data_path,"videos_trainval", sample))
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 to match model dtype (same as training)
