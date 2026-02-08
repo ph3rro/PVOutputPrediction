@@ -202,7 +202,7 @@ class PVRegressionDataset(Dataset):
                 buffer = self.image_log[index]
             else:
                 sample = self.dataset_samples[index]  # this refers to the path of the video
-                buffer = self.load_video(os.path.join(data_path,"videos_trainval", sample), sample_rate_scale=scale_t)
+                buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample), sample_rate_scale=scale_t)
             
 
             #sample = self.dataset_samples[index]
