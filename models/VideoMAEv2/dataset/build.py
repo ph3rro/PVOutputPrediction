@@ -49,8 +49,7 @@ def build_dataset(is_train, test_mode, args):
     if args.data_set == 'PVOutputPrediction':
         dataset = PVRegressionDataset(
             h5_path=args.h5_path,
-            trainval_data_path=args.trainval_data_path,
-            test_data_path=args.test_data_path,
+            data_path=args.data_path,
             data_root=args.data_root,
             mode=mode,
             clip_len=args.num_frames,
