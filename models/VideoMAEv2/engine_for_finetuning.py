@@ -213,8 +213,8 @@ def validation_one_epoch(data_loader, model, device):
             loss = criterion(output.squeeze(-1), pv_pred)
 
         if model.model_task == 'regression':
-            mse = torch.nn.functional.mse_loss(output.squeeze(), pv_pred)
-            mae = torch.nn.functional.l1_loss(output.squeeze(), pv_pred)
+            mse = torch.nn.functional.mse_loss(output.squeeze(-1), pv_pred)
+            mae = torch.nn.functional.l1_loss(output.squeeze(-1), pv_pred)
             
             batch_size = images.shape[0]
             metric_logger.update(loss=loss.item())
@@ -288,8 +288,8 @@ def final_test(data_loader, model, device, file):
         if model.model_task == 'regression':
 
             # For regression, calculate MSE and MAE
-            mse = torch.nn.functional.mse_loss(output.squeeze(), target)
-            mae = torch.nn.functional.l1_loss(output.squeeze(), target)
+            mse = torch.nn.functional.mse_loss(output.squeeze(-1), target)
+            mae = torch.nn.functional.l1_loss(output.squeeze(-1), target)
             
             batch_size = images.shape[0]
             metric_logger.update(loss=loss.item())
