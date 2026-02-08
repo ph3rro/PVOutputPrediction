@@ -107,7 +107,7 @@ class PVRegressionDataset(Dataset):
             pv_pred_test = f['test/pv_pred']
         else:
             self.video_loader = get_video_loader()
-            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_train")) #changed to parquet
+            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_trainval", "metadata.parquet")) #changed to parquet
             trainval_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy() 
             #self.label_array = list(cleaned.values[:, 1])
             times_trainval = list(cleaned.values[:, 1])
@@ -115,7 +115,7 @@ class PVRegressionDataset(Dataset):
             pv_log_trainval = np.array(cleaned.iloc[:, 2])
             pv_pred_trainval = np.array(cleaned.iloc[:, 3])
             
-            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test")) #changed to parquet
+            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test", "metadata.parquet")) #changed to parquet
             test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
             #self.label_array = list(cleaned.values[:, 1])
             times_test = list(cleaned.values[:, 1])
