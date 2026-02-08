@@ -286,12 +286,6 @@ def final_test(data_loader, model, device, file):
             final_result.append(string)
 
         if model.model_task == 'regression':
-            string = "{} {} {} {} {}\n".format(
-                ids[i], str(output.data[i].cpu().numpy().tolist()),
-                str(float(target[i].cpu().numpy())),
-                str(float(chunk_nb[i].cpu().numpy())),
-                str(float(split_nb[i].cpu().numpy())))
-            final_result.append(string)
 
             # For regression, calculate MSE and MAE
             mse = torch.nn.functional.mse_loss(output.squeeze(), target)
@@ -302,12 +296,7 @@ def final_test(data_loader, model, device, file):
             metric_logger.meters['mse'].update(mse.item(), n=batch_size)
             metric_logger.meters['mae'].update(mae.item(), n=batch_size)
         else:
-            string = "{} {} {} {} {}\n".format(
-                ids[i], str(output.data[i].cpu().numpy().tolist()),
-                str(int(target[i].cpu().numpy())),
-                str(int(chunk_nb[i].cpu().numpy())),
-                str(int(split_nb[i].cpu().numpy())))
-            final_result.append(string)
+
             # For classification, use accuracy
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             batch_size = images.shape[0]
