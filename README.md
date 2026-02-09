@@ -6,7 +6,7 @@ Data preprocessing scripts for sky-video-PV pairs and modified VideoMAEv2 for re
 
 ## Prerequisites
 
-- Python 3.13
+- Python 3.12.3
 - NVIDIA GPU with CUDA support (recommended for training)
 - CUDA 12.6+ (version compatible with Pytorch)
 - Git
@@ -20,14 +20,14 @@ cd PVOutputPrediction
 
 ## Step 2: Create Virtual Environments
 
-Install Python 3.13 and add to PATH.
+Install Python 3.12.3 and add to PATH.
 
 You will need two separate virtual environments—one for the preprocessing notebooks and one for VideoMAEv2
 
 ```bash
-python3.13 -m venv preprocessing-env
+python3.12 -m venv preprocessing-env
 cd models/VideoMAEv2
-python3.13 -m venv VideoMAE-env
+python3.12 -m venv VideoMAE-env
 ```
 
 ## Step 3: Install PyTorch with CUDA Support 
@@ -91,13 +91,15 @@ if torch.cuda.is_available():
 
 ### CUDA
 ```bash
-python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --mixup=0 --cutmix=0
+python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --warmup_lr=1e-3 --mixup=0 --cutmix=0 --data_path="/home/pherro/PVOutputPrediction/preprocessing/data/data_forecast4/"
 ```
 
 ### CPU (not recommended)
 ```bash
 python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --mixup=0 --cutmix=0 --device='cpu'
 ```
+
+Replace data_path with whatever data_path you are using. This folder should contain folders named metadata_trainval, metadata_test, videos_trainval, and videos_test. The metadata folders should contain a parquet file with columns of mp4 file name, timestamp, pv log of shape 16, and pv pred, while the videos folders should contain enumerated mp4s.
 
 ## Pretraining
 
