@@ -249,7 +249,7 @@ class PVRegressionDataset(Dataset):
                 buffer = self.image_log[index]
             else:
                 sample = self.dataset_samples[index]
-                buffer = self.load_video(os.path.join(data_path,"videos_trainval", sample))
+                buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample))
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 to match model dtype (same as training)
