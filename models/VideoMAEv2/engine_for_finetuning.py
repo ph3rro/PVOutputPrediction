@@ -22,7 +22,7 @@ import utils
 
 def train_class_batch(model, samples, pv, target, criterion):
     outputs = model(samples, pv)
-    loss = criterion(outputs.squeeze(-1), target)
+    loss = criterion(outputs.float().squeeze(-1), target)
     return loss, outputs
 
 

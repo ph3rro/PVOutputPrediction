@@ -308,8 +308,6 @@ class PvEmbed(nn.Module):
         self.embed_dim = embed_dim
         self.num_frames = num_frames
         self.tubelet_size = tubelet_size
-        #self.conv = nn.Conv1d(1, embed_dim, kernel_size, padding=kernel_size//2)
-        #self.pool = nn.AdaptiveAvgPool1d(1)
         
         # A simple MLP to create the embeddings
         self.pv_embedder = nn.Sequential(
@@ -320,11 +318,21 @@ class PvEmbed(nn.Module):
 
     def forward(self, x, **kwargs):
         B, T = x.shape
-        pv_data_reshaped = x.view(B, T//self.tubelet_size, self.tubelet_size)
+        pv_data_reshaped = x.view(B, T//self.tubelet_size, self.tubelet_size).float()
 
-        # Create the PV tokens
-        pv_tokens = self.pv_embedder(pv_data_reshaped)
-        return pv_tokens
+        # Run through pv_embedder in float32 for numerical precision.
+        # Weights are kept in fp16 by DeepSpeed, but we cast them to float32
+        # on the fly so gradients still flow back as fp16.
+        for module in self.pv_embedder:
+            if isinstance(module, nn.Linear):
+                pv_data_reshaped = F.linear(
+                    pv_data_reshaped,
+                    module.weight.float(),
+                    module.bias.float() if module.bias is not None else None)
+            else:
+                pv_data_reshaped = module(pv_data_reshaped)
+
+        return pv_data_reshaped
 
 # sin-cos position encoding
 # https://github.com/jadore801120/attention-is-all-you-need-pytorch/blob/master/transformer/Models.py#L31
@@ -473,9 +481,8 @@ class VisionTransformer(nn.Module):
 
     def forward_features(self, x, pv):
         B = x.size(0)
-
         x = self.patch_embed(x)
-        pv = self.pv_embed(pv)
+        pv = self.pv_embed(pv).to(x.dtype)
         x = torch.cat((x, pv), dim=1)
         
         if self.pos_embed is not None:

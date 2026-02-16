@@ -10,13 +10,21 @@ import argparse
 import datetime
 import json
 import os
+
+#os.environ["NCCL_NVLS_ENABLE"] = "0"
+#os.environ["NCCL_IGNORE_CPU_AFFINITY"] = "1" 
+#os.environ["NCCL_DEBUG"] = "WARN"
+#os.environ["NCCL_COLLNET_ENABLE"] = "0"
+# Adding these to prevent the next likely errors (P2P and IB)
+#os.environ["NCCL_P2P_DISABLE"] = "1"
+#os.environ["NCCL_IB_DISABLE"] = "1"
 import random
 import time
 from collections import OrderedDict
 from functools import partial
 from pathlib import Path
 
-#import deepspeed
+import deepspeed
 import numpy as np
 import torch
 from torchinfo import summary
@@ -490,7 +498,7 @@ def main(args, ds_init):
         pin_memory=args.pin_mem,
         drop_last=True,
         collate_fn=collate_func,
-        persistent_workers=False)
+        persistent_workers=True)
 
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
@@ -500,7 +508,7 @@ def main(args, ds_init):
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False,
-            persistent_workers=False) # setting it false because num_workers is 0 on Windows
+            persistent_workers=True) # setting it false because num_workers is 0 on Windows
     else:
         data_loader_val = None
 
@@ -512,7 +520,7 @@ def main(args, ds_init):
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False,
-            persistent_workers=False)
+            persistent_workers=True)
     else:
         data_loader_test = None
 
