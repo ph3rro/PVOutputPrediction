@@ -266,8 +266,8 @@ def final_test(data_loader, model, device, file):
         pv_log = batch[1]
         target = batch[2]
         ids = batch[3]
-        chunk_nb = batch[4]
-        split_nb = batch[5]
+        #chunk_nb = batch[4]
+        #split_nb = batch[5]
         images = images.to(device, non_blocking=True)
         pv_log = pv_log.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
@@ -281,8 +281,9 @@ def final_test(data_loader, model, device, file):
             string = "{} {} {} {} {}\n".format(
                 ids[i], str(output.data[i].cpu().numpy().tolist()),
                 str(int(target[i].cpu().numpy())),
-                str(int(chunk_nb[i].cpu().numpy())),
-                str(int(split_nb[i].cpu().numpy())))
+                #str(int(chunk_nb[i].cpu().numpy())),
+                #str(int(split_nb[i].cpu().numpy()))
+                )
             final_result.append(string)
 
         if model.model_task == 'regression':
@@ -345,21 +346,21 @@ def merge(eval_path, num_tasks, method='prob'):
             line = line.strip()
             name = line.split('[')[0]
             label = line.split(']')[1].split(' ')[1]
-            chunk_nb = line.split(']')[1].split(' ')[2]
-            split_nb = line.split(']')[1].split(' ')[3]
+            #chunk_nb = line.split(']')[1].split(' ')[2]
+            #split_nb = line.split(']')[1].split(' ')[3]
             data = np.fromstring(
                 line.split('[')[1].split(']')[0], dtype=float, sep=',')
             if name not in dict_feats:
                 dict_feats[name] = []
                 dict_label[name] = 0
                 dict_pos[name] = []
-            if chunk_nb + split_nb in dict_pos[name]:
-                continue
+            #if chunk_nb + split_nb in dict_pos[name]:
+            #    continue
             if method == 'prob':
                 dict_feats[name].append(softmax(data))
             else:
                 dict_feats[name].append(data)
-            dict_pos[name].append(chunk_nb + split_nb)
+            #dict_pos[name].append(chunk_nb + split_nb)
             dict_label[name] = label
     print("Computing final results")
 

@@ -239,7 +239,7 @@ class PVRegressionDataset(Dataset):
             # Convert to float32 to match model dtype
             pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
             pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
-            return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
+            return buffer, pv_log, pv_pred, index # We are adding pv_log as an additional input
 
             # Note: Looking at run_class_finetuning.py, it seems that the last two values are not used for train and validation, only for test
             
