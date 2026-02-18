@@ -136,3 +136,57 @@ def trainval(model, device, loader, optimizer, criterion, mode="train"):
     total_loss = total_loss / size
     return total_loss
 
+def mc_dropout_ensemble(model, inputs, n_samples=50):
+    """
+    Runs MC Dropout inference on a PyTorch model using a functional approach.
+    """
+    # 1. Set model to evaluation mode (fixes Batch Norm layers)
+    model.eval()
+    
+    # 2. Force ONLY Dropout layers to be in 'train' mode (active)
+    def enable_dropout(m):
+        if type(m) == torch.nn.Dropout:
+            m.train()
+            
+    # Apply this function to every layer in the model
+    model.apply(enable_dropout)
+    
+    # 3. Run the loop
+    predictions = []
+    with torch.no_grad():
+        for _ in range(n_samples):
+            # The model will now output different values each time
+            predictions.append(model(inputs))
+    
+    # 4. Stack and Calculate Statistics
+    # Stack shape: [n_samples, batch_size, output_dim]
+    stack = torch.stack(predictions)
+    
+    mu = torch.mean(stack, dim=0)   # The Prediction
+    sigma = torch.std(stack, dim=0) # The Uncertainty
+    
+    return mu, sigma
+
+import CRPS.CRPS as pscore  # The library from your notebook
+
+def calculate_crps(predictions, y_true):
+    """
+    predictions: shape (ensemble_size, n_samples) -> e.g., (50, 1000)
+    y_true: shape (n_samples,) -> e.g., (1000,)
+    """
+    n_samples = len(y_true)
+    crps_list = []
+
+    print(f"Calculating CRPS for {n_samples} points...")
+    
+    for i in range(n_samples):
+
+        ensemble_distribution = predictions[:, i]
+        
+        observation = y_true[i]
+        
+        score, _, _ = pscore(ensemble_distribution, observation).compute()
+        
+        crps_list.append(score)
+
+    return np.mean(crps_list)
