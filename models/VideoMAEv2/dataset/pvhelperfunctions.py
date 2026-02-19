@@ -186,12 +186,12 @@ def calculate_crps(predictions, y_true):
     
     for i in range(n_samples):
 
-        ensemble_distribution = predictions[:, i]
+        ensemble_distribution = predictions[:, i].flatten()
         
-        observation = y_true[i]
+        observation = float(y_true[i])
         
         score, _, _ = pscore(ensemble_distribution, observation).compute()
         
-        crps_list.append(score)
+        crps_list.append(float(score))
 
     return np.mean(crps_list)
