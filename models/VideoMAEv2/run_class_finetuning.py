@@ -826,9 +826,10 @@ def main(args, ds_init):
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-        test_stats = final_test(data_loader_test, model, device, preds_file)
+        #test_stats = final_test(data_loader_test, model, device, preds_file)
+        test_stats = validation_one_epoch(data_loader_test, model, device)
         torch.distributed.barrier()
-        if global_rank == 0:
+        '''if global_rank == 0:
             print("Start merging results...")
             final_top1, final_top5 = merge(args.output_dir, num_tasks)
             print(
@@ -840,7 +841,8 @@ def main(args, ds_init):
                         os.path.join(args.output_dir, "log.txt"),
                         mode="a",
                         encoding="utf-8") as f:
-                    f.write(json.dumps(log_stats) + "\n")
+                    f.write(json.dumps(log_stats) + "\n")'''
+        
         exit(0)
 
     print(f"Start training for {args.epochs} epochs")

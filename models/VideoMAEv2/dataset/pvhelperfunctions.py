@@ -162,10 +162,10 @@ def mc_dropout_ensemble(model, inputs, n_samples=50):
     # Stack shape: [n_samples, batch_size, output_dim]
     stack = torch.stack(predictions)
     
-    mu = torch.mean(stack, dim=0)   # The Prediction
-    sigma = torch.std(stack, dim=0) # The Uncertainty
+    # mu = torch.mean(stack, dim=0)   # The Prediction
+    # sigma = torch.std(stack, dim=0) # The Uncertainty
     
-    return mu, sigma
+    return stack
 
 import CRPS.CRPS as pscore  # The library from your notebook
 
