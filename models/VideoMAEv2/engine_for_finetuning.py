@@ -247,10 +247,6 @@ def validation_one_epoch(data_loader, model, device):
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 def test_with_CRPS(data_loader, model, device, ensemble_size=50):
-    if model.model_task == 'regression':
-        criterion = torch.nn.MSELoss()
-    else:
-        criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test with CRPS:'

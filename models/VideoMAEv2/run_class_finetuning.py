@@ -43,6 +43,7 @@ from engine_for_finetuning import (
     merge,
     train_one_epoch,
     validation_one_epoch,
+    test_with_CRPS,
 )
 from optim_factory import (
     LayerDecayValueAssigner,
@@ -827,7 +828,7 @@ def main(args, ds_init):
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
         #test_stats = final_test(data_loader_test, model, device, preds_file)
-        test_stats = validation_one_epoch(data_loader_test, model, device)
+        test_stats = test_with_CRPS(data_loader_test, model, device)
         torch.distributed.barrier()
         '''if global_rank == 0:
             print("Start merging results...")
