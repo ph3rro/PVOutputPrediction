@@ -174,6 +174,11 @@ def calculate_crps(predictions, y_true):
     predictions: shape (ensemble_size, n_samples) -> e.g., (50, 1000)
     y_true: shape (n_samples,) -> e.g., (1000,)
     """
+    if hasattr(predictions, 'cpu'):
+        predictions = predictions.cpu().numpy()
+    if hasattr(y_true, 'cpu'):
+        y_true = y_true.cpu().numpy()
+
     n_samples = len(y_true)
     crps_list = []
 
