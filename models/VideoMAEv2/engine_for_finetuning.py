@@ -246,6 +246,50 @@ def validation_one_epoch(data_loader, model, device):
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+@torch.no_grad()
+def test_and_save_outputs(data_loader, model, device, data_path):
+    if model.model_task == 'regression':
+        criterion = torch.nn.MSELoss()
+    else:
+        criterion = torch.nn.CrossEntropyLoss()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'Test and save outputs:'
+
+    # switch to evaluation mode
+    model.eval()
+    outputs = []
+    for batch in metric_logger.log_every(data_loader, 10, header):
+        images = batch[0]
+        pv_log = batch[1]
+        pv_pred = batch[2]
+        images = images.to(device, non_blocking=True)
+        pv_pred = pv_pred.to(device, non_blocking=True)
+        pv_log = pv_log.to(device, non_blocking=True)
+
+        # compute output
+        with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
+            output = model(images, pv_log)
+            outputs.append(output.detach().cpu())
+            loss = criterion(output.squeeze(-1), pv_pred)
+
+        if model.model_task == 'regression':
+            mse = torch.nn.functional.mse_loss(output.squeeze(-1), pv_pred)
+            mae = torch.nn.functional.l1_loss(output.squeeze(-1), pv_pred)
+            
+            batch_size = images.shape[0]
+            metric_logger.update(loss=loss.item())
+            metric_logger.meters['mse'].update(mse.item(), n=batch_size)
+            metric_logger.meters['mae'].update(mae.item(), n=batch_size)
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+
+    if outputs:
+        outputs = torch.cat(outputs, dim=0)
+        np.save(os.path.join(data_path, 'predictions.npy'), outputs.numpy())
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
 def test_with_CRPS(data_loader, model, device, ensemble_size=50):
 
     metric_logger = utils.MetricLogger(delimiter="  ")

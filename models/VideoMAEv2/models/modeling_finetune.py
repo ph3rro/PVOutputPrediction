@@ -508,6 +508,35 @@ class VisionTransformer(nn.Module):
         x = self.head(x)
         return x
 
+class QuantileVideoPVModel(nn.Module):
+    def __init__(self, pretrained_model, num_quantiles=9):
+        super().__init__()
+        self.backbone = pretrained_model
+        self.model_task = 'regression'
+
+        # Replace scalar regression head with multi-quantile head.
+        in_features = pretrained_model.head.in_features
+        self.head = nn.Linear(in_features, num_quantiles)
+
+        # Initialize quantile head from the trained regression head.
+        with torch.no_grad():
+            repeated_weights = pretrained_model.head.weight.repeat(num_quantiles, 1)
+            repeated_bias = pretrained_model.head.bias.repeat(num_quantiles)
+            self.head.weight.copy_(repeated_weights)
+            self.head.bias.copy_(repeated_bias)
+
+    def get_num_layers(self):
+        return self.backbone.get_num_layers()
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return self.backbone.no_weight_decay()
+
+    def forward(self, x, pv):
+        x = self.backbone.forward_features(x, pv)
+        x = self.backbone.head_dropout(x)
+        x = self.head(x)
+        return x
 
 @register_model
 def vit_small_patch16_224(pretrained=False, **kwargs):

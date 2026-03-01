@@ -5,7 +5,7 @@
 # https://github.com/facebookresearch/deit
 # https://github.com/facebookresearch/dino
 # --------------------------------------------------------'
-
+#TODO make validation print CRPS for quantile regression
 import argparse
 import datetime
 import json
@@ -44,7 +44,9 @@ from engine_for_finetuning import (
     train_one_epoch,
     validation_one_epoch,
     test_with_CRPS,
+    test_and_save_outputs,
 )
+from models.modeling_finetune import QuantileVideoPVModel
 from optim_factory import (
     LayerDecayValueAssigner,
     create_optimizer,
@@ -71,6 +73,8 @@ def get_args():
         metavar='MODEL',
         help='Name of model to train')
     parser.add_argument('--model_task', type=str, default='regression', help = "regression or classification") # regression set as default for purposes of PV regression project
+    parser.add_argument('--quantile_regression', action='store_true', default=False,
+                        help='Enable quantile regression head and pinball loss')
     
     # TO DO for above line: make it so there are only two options, regression and classification and throw error otherwise
 
@@ -380,6 +384,8 @@ def get_args():
     parser.add_argument(
         '--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument(
+        '--test_and_save_outputs', action='store_true', help='Test and save outputs')
+    parser.add_argument(
         '--validation', action='store_true', help='Perform validation only')
     parser.add_argument(
         '--dist_eval',
@@ -567,7 +573,7 @@ def main(args, ds_init):
                         args.input_size // patch_size[1])
 
     args.patch_size = patch_size
-
+    
     if args.finetune:
         if args.finetune.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -701,6 +707,10 @@ def main(args, ds_init):
         utils.load_state_dict(
             model, checkpoint_model, prefix=args.model_prefix)
 
+
+    if args.quantile_regression:
+        model = QuantileVideoPVModel(model, num_quantiles=9)
+        
     model.to(device)
 
     model_ema = None
@@ -797,9 +807,24 @@ def main(args, ds_init):
                                                 num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" %
           (max(wd_schedule_values), min(wd_schedule_values)))
+    if args.quantile_regression:
+        def pinball_loss(y_pred, y_true):
+            """
+            y_pred: shape [batch_size, num_quantiles] (predicted quantiles)
+            y_true: shape [batch_size] or [batch_size, 1] (actual PV power)
+            """
+            if y_true.ndim == 1:
+                y_true = y_true.unsqueeze(-1)
+            quantiles = y_pred.new_tensor([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+            q_tensor = quantiles.view(1, -1)
+            error = y_true - y_pred
+            loss = torch.max(q_tensor * error, (q_tensor - 1) * error)
+            return torch.mean(loss)
+        criterion = pinball_loss
 
-    if args.model_task == 'regression':
+    elif args.model_task == 'regression':
         criterion = torch.nn.MSELoss()
+    
     else:
         if mixup_fn is not None:
             # smoothing is handled with mixup label transform
@@ -824,7 +849,9 @@ def main(args, ds_init):
             f"{len(dataset_val)} val images: Top-1 {test_stats['acc1']:.2f}%, Top-5 {test_stats['acc5']:.2f}%, loss {test_stats['loss']:.4f}"
         )
         exit(0)
-
+    if args.test_and_save_outputs:
+        test_stats = test_and_save_outputs(data_loader_test, model, device, args.data_path)
+        exit(0)
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
         #test_stats = final_test(data_loader_test, model, device, preds_file)
