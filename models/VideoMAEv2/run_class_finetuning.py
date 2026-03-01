@@ -458,8 +458,8 @@ def main(args, ds_init):
     else:
         dataset_val, _ = build_dataset(
             is_train=False, test_mode=False, args=args)
-    # making dataset test the same as others for testing temporarily PLEASE CHANGE BACK PLEASE LATER
-    dataset_test, _ = build_dataset(is_train=True, test_mode=False, args=args)
+
+    dataset_test, _ = build_dataset(is_train=False, test_mode=True, args=args)
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
