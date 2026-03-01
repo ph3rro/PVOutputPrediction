@@ -174,7 +174,7 @@ class PVRegressionDataset(Dataset):
                 self.dataset_samples = test_dataset_samples
             self.pv_log = pv_log_test
             self.pv_pred = pv_pred_test
-            self.data_resize = video_transforms.Compose([
+            '''self.data_resize = video_transforms.Compose([
                 video_transforms.Resize(
                     size=(short_side_size), interpolation='bilinear')
             ])
@@ -182,17 +182,8 @@ class PVRegressionDataset(Dataset):
                 volume_transforms.ClipToTensor(),
                 video_transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
-            '''self.test_seg = []
-            self.test_dataset = []
-            self.test_label_array = []
-            for ck in range(self.test_num_segment):
-                for cp in range(self.test_num_crop):
-                    for idx in range(len(self.label_array)):
-                        sample_label = self.label_array[idx]
-                        self.test_label_array.append(sample_label)
-                        self.test_dataset.append(self.dataset_samples[idx])
-                        self.test_seg.append((ck, cp))'''
+            ])'''
+
 
     def __getitem__(self, index):
         if self.mode == 'train':
@@ -260,68 +251,18 @@ class PVRegressionDataset(Dataset):
             
 
         elif self.mode == 'test':
-            '''sample = self.test_dataset[index]
-            chunk_nb, split_nb = self.test_seg[index]
-            buffer = self.load_video(sample)
-
-            while len(buffer) == 0:
-                warnings.warn(
-                    "video {}, temporal {}, spatial {} not found during testing"
-                    .format(str(self.test_dataset[index]), chunk_nb, split_nb))
-                index = np.random.randint(self.__len__())
-                sample = self.test_dataset[index]
-                chunk_nb, split_nb = self.test_seg[index]
-                buffer = self.load_video(sample)
-
-            buffer = self.data_resize(buffer)
-            if isinstance(buffer, list):
-                buffer = np.stack(buffer, 0)'''
-
-
-            # We are not using data augmentations/sampling for now
-
-            '''if self.sparse_sample:
-                spatial_step = 1.0 * (max(buffer.shape[1], buffer.shape[2]) -
-                                      self.short_side_size) / (
-                                          self.test_num_crop - 1)
-                temporal_start = chunk_nb
-                spatial_start = int(split_nb * spatial_step)
-                if buffer.shape[1] >= buffer.shape[2]:
-                    buffer = buffer[temporal_start::self.test_num_segment,
-                                    spatial_start:spatial_start +
-                                    self.short_side_size, :, :]
-                else:
-                    buffer = buffer[temporal_start::self.test_num_segment, :,
-                                    spatial_start:spatial_start +
-                                    self.short_side_size, :]
+           
+            if self.use_h5:
+                buffer = self.image_log[index]
             else:
-                spatial_step = 1.0 * (max(buffer.shape[1], buffer.shape[2]) -
-                                      self.short_side_size) / (
-                                          self.test_num_crop - 1)
-                temporal_step = max(
-                    1.0 * (buffer.shape[0] - self.clip_len) /
-                    (self.test_num_segment - 1), 0)
-                temporal_start = int(chunk_nb * temporal_step)
-                spatial_start = int(split_nb * spatial_step)
-                if buffer.shape[1] >= buffer.shape[2]:
-                    buffer = buffer[temporal_start:temporal_start +
-                                    self.clip_len,
-                                    spatial_start:spatial_start +
-                                    self.short_side_size, :, :]
-                else:
-                    buffer = buffer[temporal_start:temporal_start +
-                                    self.clip_len, :,
-                                    spatial_start:spatial_start +
-                                    self.short_side_size, :]'''
-
-            # Apply same transformation as validation mode
-            buffer = self.image_log[index]
-            buffer = self._aug_frame(buffer, self.args)
-            # Convert pv_log and pv_pred to tensors
+                sample = self.dataset_samples[index]
+                buffer = self.load_video(os.path.join(self.data_path,"videos_test", sample))
+            args = self.args
+            buffer = self._aug_frame(buffer, args)
+            # Convert to float32 to match model dtype (same as training)
             pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
             pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
-            # Return: images, pv_log, target, ids, chunk_nb, split_nb
-            return buffer, pv_log, pv_pred, index, 0, 0
+            return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
         else:
             raise NameError('mode {} unkown'.format(self.mode))
 
