@@ -114,6 +114,7 @@ class PVRegressionDataset(Dataset):
             #print("type, ", type(cleaned.values[:,2][6]))
             pv_log_trainval = np.array(cleaned.iloc[:, 2])
             pv_pred_trainval = np.array(cleaned.iloc[:, 3])
+            cloudiness_trainval = np.array(cleaned.iloc[:, 4])
             
             cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test", "metadata.parquet")) #changed to parquet
             test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
@@ -122,6 +123,7 @@ class PVRegressionDataset(Dataset):
             #print("type, ", type(cleaned.values[:,2][6]))
             pv_log_test = np.array(cleaned.iloc[:, 2]) 
             pv_pred_test = np.array(cleaned.iloc[:, 3])
+            cloudiness_test = np.array(cleaned.iloc[:, 4])
         #print(f['trainval/image_log'][0])
         #print(f['trainval/pv_log'])
         #print(f['trainval/pv_pred'])

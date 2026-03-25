@@ -21,9 +21,7 @@ import utils
 from dataset.pvhelperfunctions import calculate_crps
 
 def train_class_batch(model, samples, pv, target, criterion):
-    print("target shape: ", target.shape)
-    print("pv shape: ", pv.shape)
-    target = target - pv[:,-1]  
+    target = target - pv[:,-1].squeeze(-1)
     outputs = model(samples, pv)
     loss = criterion(outputs.float().squeeze(-1), target)
     return loss, outputs
