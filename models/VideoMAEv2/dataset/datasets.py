@@ -123,7 +123,7 @@ class PVRegressionDataset(Dataset):
             #print("type, ", type(cleaned.values[:,2][6]))
             pv_log_test = np.array(cleaned.iloc[:, 2]) 
             pv_pred_test = np.array(cleaned.iloc[:, 3])
-            cloudiness_test = np.array(cleaned.iloc[:, 4])
+            #cloudiness_test = np.array(cleaned.iloc[:, 4])
         #print(f['trainval/image_log'][0])
         #print(f['trainval/pv_log'])
         #print(f['trainval/pv_pred'])
