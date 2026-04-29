@@ -116,7 +116,7 @@ class PVRegressionDataset(Dataset):
             pv_pred_trainval = np.array(cleaned.iloc[:, 3])
             cloudiness_trainval = np.array(cleaned.iloc[:, 4])
             
-            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test", "metadata_with_cloudiness.parquet")) #changed to parquet
+            cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test", "metadata.parquet"))
             test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
             #self.label_array = list(cleaned.values[:, 1])
             times_test = list(cleaned.values[:, 1])
