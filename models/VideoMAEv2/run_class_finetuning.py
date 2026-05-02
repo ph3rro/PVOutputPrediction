@@ -307,6 +307,7 @@ def get_args():
     parser.add_argument(
         '--use_cls', action='store_false', dest='use_mean_pooling')
 
+    parser.add_argument('--use_residual', action='store_true', default=False, help='Have model predict the delta between current PV and future PV instead of future PV')
     # Dataset parameters
     parser.add_argument(
         '--h5_path',
@@ -460,6 +461,10 @@ def main(args, ds_init):
             is_train=False, test_mode=False, args=args)
 
     dataset_test, _ = build_dataset(is_train=False, test_mode=True, args=args)
+
+    residual_mean = dataset_train.residual_mean
+    residual_std = dataset_train.residual_std
+    print(f"Residual normalization: mean={residual_mean:.4f}, std={residual_std:.4f}")
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
@@ -844,18 +849,18 @@ def main(args, ds_init):
         loss_scaler=loss_scaler,
         model_ema=model_ema)
     if args.validation:
-        test_stats = validation_one_epoch(data_loader_val, model, device)
+        test_stats = validation_one_epoch(data_loader_val, model, device, args.use_residual, residual_mean, residual_std)
         print(
             f"{len(dataset_val)} val images: Top-1 {test_stats['acc1']:.2f}%, Top-5 {test_stats['acc5']:.2f}%, loss {test_stats['loss']:.4f}"
         )
         exit(0)
     if args.test_and_save_outputs:
-        test_stats = test_and_save_outputs(data_loader_test, model, device, args.data_path)
+        test_stats = test_and_save_outputs(data_loader_test, model, device, args.data_path, args.use_residual, residual_mean, residual_std)
         exit(0)
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
         #test_stats = final_test(data_loader_test, model, device, preds_file)
-        test_stats = test_with_CRPS(data_loader_test, model, device)
+        test_stats = test_with_CRPS(data_loader_test, model, device, use_residual=args.use_residual, residual_mean=residual_mean, residual_std=residual_std)
         torch.distributed.barrier()
         '''if global_rank == 0:
             print("Start merging results...")
@@ -884,6 +889,7 @@ def main(args, ds_init):
                                 args.update_freq)
         train_stats = train_one_epoch(
             model,
+            args.use_residual,
             criterion,
             data_loader_train,
             optimizer,
@@ -913,7 +919,7 @@ def main(args, ds_init):
                     model_ema=model_ema)
         if data_loader_val is not None:
         #if False:
-            test_stats = validation_one_epoch(data_loader_val, model, device)
+            test_stats = validation_one_epoch(data_loader_val, model, device, args.use_residual, residual_mean, residual_std)
             if args.model_task == 'regression':
                 print(f"MSE of the network on the {len(dataset_val)} val images: {test_stats['mse']:.4f}")
                 if max_accuracy < -test_stats["mse"]:  # Convert MSE to negative for "higher is better"
@@ -980,7 +986,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file)
+    test_stats = final_test(data_loader_test, model, device, preds_file, args.use_residual, residual_mean, residual_std)
     torch.distributed.barrier()
 
     if global_rank == 0:

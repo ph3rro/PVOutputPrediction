@@ -70,33 +70,6 @@ class PVRegressionDataset(Dataset):
             if self.args.reprob > 0:
                 self.rand_erase = True
 
-
-
-        '''try:
-            with h5py.File(data_path, 'r') as f:
-                dset = f['trainval/image_log']
-                
-                # Check if it's a virtual dataset
-                if dset.is_virtual:
-                    print("✅ This is a Virtual Dataset.")
-                    print("\nIt expects to find the following source files:")
-                    
-                    # Print the source file paths it's looking for
-                    sources = dset.virtual_sources()
-                    for vs in sources:
-                        print(f"  - File Path: '{vs.file_name}'")
-                        print(f"    Dataset Name: '{vs.dset_name}'")
-                    
-
-                    
-                else:
-                    print("This is not a Virtual Dataset. The issue might be file corruption.")
-
-        except OSError as e:
-            print(f"Caught an OSError: {e}")
-            print("\nThis likely confirms the virtual source files are missing or paths are incorrect.")
-        except KeyError:
-            print("Dataset 'trainval/image_log' not found in the HDF5 file.")'''
         if self.use_h5:
             f = h5py.File(self.h5_path, 'r')
             image_log_trainval = f['trainval/image_log']
@@ -138,7 +111,14 @@ class PVRegressionDataset(Dataset):
 
         pv_log_train, pv_log_val = pv_log_trainval[train_indices], pv_log_trainval[val_indices]
         pv_pred_train, pv_pred_val = pv_pred_trainval[train_indices], pv_pred_trainval[val_indices]
-        
+
+        # Compute normalization stats from training residuals (always use training stats)
+        _pv_log_last = np.array([np.asarray(row)[-1] for row in pv_log_train], dtype=np.float32)
+        _pv_pred = np.asarray(pv_pred_train, dtype=np.float32)
+        train_residuals = _pv_pred - _pv_log_last
+        self.residual_mean = float(np.mean(train_residuals))
+        self.residual_std = float(np.std(train_residuals)) or 1.0
+
         # temporary testing
         #image_log_train = image_log_train[1000:1100]
         #pv_log_train = pv_log_train[1000:1100]
@@ -229,9 +209,9 @@ class PVRegressionDataset(Dataset):
                 buffer = self._aug_frame(buffer, args)
             #print("pv_pred shape: ", self.pv_pred.shape)
             #print("pv_pred: ", self.pv_pred[index])
-            # Convert to float32 to match model dtype
-            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
-            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
+            # Convert to float32 and normalize by residual statistics
+            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
             return buffer, pv_log, pv_pred, index # We are adding pv_log as an additional input
 
             # Note: Looking at run_class_finetuning.py, it seems that the last two values are not used for train and validation, only for test
@@ -245,9 +225,9 @@ class PVRegressionDataset(Dataset):
                 buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample))
             args = self.args
             buffer = self._aug_frame(buffer, args)
-            # Convert to float32 to match model dtype (same as training)
-            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
-            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
+            # Convert to float32 and normalize by residual statistics
+            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
             return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
             # WE ARE NOT USING the crop part of the data_transform FOR NOW
             
@@ -261,9 +241,9 @@ class PVRegressionDataset(Dataset):
                 buffer = self.load_video(os.path.join(self.data_path,"videos_test", sample))
             args = self.args
             buffer = self._aug_frame(buffer, args)
-            # Convert to float32 to match model dtype (same as training)
-            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
-            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
+            # Convert to float32 and normalize by residual statistics
+            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
             return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
         else:
             raise NameError('mode {} unkown'.format(self.mode))

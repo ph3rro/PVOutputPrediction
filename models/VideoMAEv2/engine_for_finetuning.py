@@ -20,9 +20,9 @@ from timm.utils import ModelEma, accuracy
 import utils
 from dataset.pvhelperfunctions import calculate_crps
 
-def train_class_batch(model, samples, pv, target, criterion):
-    target = target - pv[:,-1].squeeze(-1) # predict residual
-
+def train_class_batch(model, samples, pv, target, criterion, use_residual):
+    if use_residual:
+        target = target - pv[:,-1].squeeze(-1)
     outputs = model(samples, pv)
     loss = criterion(outputs.float().squeeze(-1), target)
     return loss, outputs
@@ -35,6 +35,7 @@ def get_loss_scale_for_deepspeed(model):
 
 
 def train_one_epoch(model: torch.nn.Module,
+                    use_residual: bool,
                     criterion: torch.nn.Module,
                     data_loader: Iterable,
                     optimizer: torch.optim.Optimizer,
@@ -99,13 +100,13 @@ def train_one_epoch(model: torch.nn.Module,
         if loss_scaler is None:
             image_logs = image_logs.half()
             loss, output = train_class_batch(model, image_logs, pv_logs, pv_preds,
-                                             criterion)
+                                             criterion, use_residual)
 
         else:
             with torch.amp.autocast(device.type,dtype=torch.bfloat16): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
                 #print("pv_preds before 2nd:", pv_preds)
                 loss, output = train_class_batch(model, image_logs, pv_logs, pv_preds,
-                                                 criterion)
+                                                 criterion, use_residual)
                 #print("loss:", loss.item())
                 #print("output:", output.shape)
                 #print("output:", output)
@@ -189,7 +190,7 @@ def train_one_epoch(model: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device):
+def validation_one_epoch(data_loader, model, device, use_residual=False, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -212,11 +213,18 @@ def validation_one_epoch(data_loader, model, device):
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
             output = model(images, pv_log)
-            loss = criterion(output.squeeze(-1), pv_pred)
+            if use_residual:
+                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+            else:
+                pred_norm = output.squeeze(-1)
+            loss = criterion(pred_norm, pv_pred)
+            # denormalize to original kW scale for interpretable metrics
+            absolute_output = pred_norm * residual_std + residual_mean
+            pv_pred_raw = pv_pred * residual_std + residual_mean
 
         if model.model_task == 'regression':
-            mse = torch.nn.functional.mse_loss(output.squeeze(-1), pv_pred)
-            mae = torch.nn.functional.l1_loss(output.squeeze(-1), pv_pred)
+            mse = torch.nn.functional.mse_loss(absolute_output, pv_pred_raw)
+            mae = torch.nn.functional.l1_loss(absolute_output, pv_pred_raw)
             
             batch_size = images.shape[0]
             metric_logger.update(loss=loss.item())
@@ -249,7 +257,7 @@ def validation_one_epoch(data_loader, model, device):
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 @torch.no_grad()
-def test_and_save_outputs(data_loader, model, device, data_path):
+def test_and_save_outputs(data_loader, model, device, data_path, use_residual=False, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -272,12 +280,19 @@ def test_and_save_outputs(data_loader, model, device, data_path):
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
             output = model(images, pv_log)
-            outputs.append(output.detach().cpu())
-            loss = criterion(output.squeeze(-1), pv_pred)
+            if use_residual:
+                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+            else:
+                pred_norm = output.squeeze(-1)
+            loss = criterion(pred_norm, pv_pred)
+            # denormalize to original kW scale
+            absolute_output = pred_norm * residual_std + residual_mean
+            pv_pred_raw = pv_pred * residual_std + residual_mean
+            outputs.append(absolute_output.detach().cpu())
 
         if model.model_task == 'regression':
-            mse = torch.nn.functional.mse_loss(output.squeeze(-1), pv_pred)
-            mae = torch.nn.functional.l1_loss(output.squeeze(-1), pv_pred)
+            mse = torch.nn.functional.mse_loss(absolute_output, pv_pred_raw)
+            mae = torch.nn.functional.l1_loss(absolute_output, pv_pred_raw)
             
             batch_size = images.shape[0]
             metric_logger.update(loss=loss.item())
@@ -292,7 +307,7 @@ def test_and_save_outputs(data_loader, model, device, data_path):
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-def test_with_CRPS(data_loader, model, device, ensemble_size=50):
+def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=False, residual_mean=0.0, residual_std=1.0):
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test with CRPS:'
@@ -313,21 +328,27 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50):
             def enable_dropout(m):
                 if type(m) == torch.nn.Dropout:
                     m.train()
-                    
+
             # Apply this function to every layer in the model
             model.apply(enable_dropout)
-            
-            # 3. Run the loop
+
+            # 3. Run the loop — denormalize each member to kW scale
             predictions = []
             with torch.no_grad():
                 for _ in range(ensemble_size):
-                    # The model will now output different values each time
-                    predictions.append(model(images, pv_log))
-            
+                    pred = model(images, pv_log)
+                    if use_residual:
+                        pred_norm = pred + pv_log[:, -1].unsqueeze(-1)
+                    else:
+                        pred_norm = pred
+                    pred_raw = pred_norm * residual_std + residual_mean
+                    predictions.append(pred_raw)
+
             # 4. Stack and Calculate Statistics
             # Stack shape: [ensemble_size, batch_size, output_dim]
             stack = torch.stack(predictions)
-            crps = calculate_crps(stack, pv_pred)
+            pv_pred_raw = pv_pred * residual_std + residual_mean
+            crps = calculate_crps(stack, pv_pred_raw)
 
         if model.model_task == 'regression':
             
@@ -345,7 +366,7 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50):
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file):
+def final_test(data_loader, model, device, file, use_residual=False, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -372,12 +393,19 @@ def final_test(data_loader, model, device, file):
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
             output = model(images, pv_log)
-            loss = criterion(output.squeeze(-1), target)
+            if use_residual:
+                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+            else:
+                pred_norm = output.squeeze(-1)
+            loss = criterion(pred_norm, target)
+            # denormalize to original kW scale
+            absolute_output = pred_norm * residual_std + residual_mean
+            target_raw = target * residual_std + residual_mean
 
-        for i in range(output.size(0)):
+        for i in range(absolute_output.size(0)):
             string = "{} {} {} {} {}\n".format(
-                ids[i], str(output.data[i].cpu().numpy().tolist()),
-                str(int(target[i].cpu().numpy())),
+                ids[i], str(absolute_output.data[i].cpu().numpy().tolist()),
+                str(target_raw[i].cpu().numpy().tolist()),
                 #str(int(chunk_nb[i].cpu().numpy())),
                 #str(int(split_nb[i].cpu().numpy()))
                 )
@@ -386,8 +414,8 @@ def final_test(data_loader, model, device, file):
         if model.model_task == 'regression':
 
             # For regression, calculate MSE and MAE
-            mse = torch.nn.functional.mse_loss(output.squeeze(-1), target)
-            mae = torch.nn.functional.l1_loss(output.squeeze(-1), target)
+            mse = torch.nn.functional.mse_loss(absolute_output, target_raw)
+            mae = torch.nn.functional.l1_loss(absolute_output, target_raw)
             
             batch_size = images.shape[0]
             metric_logger.update(loss=loss.item())

@@ -13,3 +13,9 @@ dummyfile.h5
 /models/model_output
 Sky_video_pv_mapping.ipynb
 video_prediction_224_second.h5
+# Cloud / CSL artifacts (paths relative to repo root; forward slashes)
+preprocessing/cloud_detection/Clear_sky_library/CSL_env/
+preprocessing/cloud_detection/Clear_sky_library/*.npy
+preprocessing/cloud_detection/Data/
+preprocessing/cloud_detection/Helper Functions/__pycache__/
+preprocessing/test_notebook.ipynb
