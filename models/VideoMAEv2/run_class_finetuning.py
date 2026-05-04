@@ -520,7 +520,7 @@ def main(args, ds_init):
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False,
-            persistent_workers=True) # setting it false because num_workers is 0 on Windows
+            persistent_workers=True)
     else:
         data_loader_val = None
 
@@ -739,8 +739,8 @@ def main(args, ds_init):
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
     args.lr = args.lr if total_batch_size==2 else args.lr * total_batch_size / 256
     #########scale the lr#############
-    args.min_lr = args.min_lr if total_batch_size==2 else args.min_lr * total_batch_size / 256
-    args.warmup_lr = args.warmup_lr if total_batch_size==2 else args.warmup_lr * total_batch_size / 256
+    args.min_lr = args.min_lr * total_batch_size / 256
+    args.warmup_lr = args.warmup_lr * total_batch_size / 256
     #########scale the lr#############
     print("LR = %.8f" % args.lr)
     print("Batch size = %d" % total_batch_size)
@@ -861,7 +861,8 @@ def main(args, ds_init):
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
         #test_stats = final_test(data_loader_test, model, device, preds_file)
         test_stats = test_with_CRPS(data_loader_test, model, device, use_residual=args.use_residual, residual_mean=residual_mean, residual_std=residual_std)
-        torch.distributed.barrier()
+        if utils.is_dist_avail_and_initialized():
+            torch.distributed.barrier()
         '''if global_rank == 0:
             print("Start merging results...")
             final_top1, final_top5 = merge(args.output_dir, num_tasks)
@@ -987,21 +988,23 @@ def main(args, ds_init):
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
     test_stats = final_test(data_loader_test, model, device, preds_file, args.use_residual, residual_mean, residual_std)
-    torch.distributed.barrier()
+    if utils.is_dist_avail_and_initialized():
+        torch.distributed.barrier()
 
     if global_rank == 0:
-        print("Start merging results...")
-        final_top1, final_top5 = merge(args.output_dir, num_tasks) # merge function merges the metrics from the different parallel processes 
-        print(
-            f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%"
-        )
-        log_stats = {'Final top-1': final_top1, 'Final Top-5': final_top5}
-        if args.output_dir and utils.is_main_process():
-            with open(
-                    os.path.join(args.output_dir, "log.txt"),
-                    mode="a",
-                    encoding="utf-8") as f:
-                f.write(json.dumps(log_stats) + "\n")
+        if args.model_task == 'classification':
+            print("Start merging results...")
+            final_top1, final_top5 = merge(args.output_dir, num_tasks) # merge function merges the metrics from the different parallel processes 
+            print(
+                f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%"
+            )
+            log_stats = {'Final top-1': final_top1, 'Final Top-5': final_top5}
+            if args.output_dir and utils.is_main_process():
+                with open(
+                        os.path.join(args.output_dir, "log.txt"),
+                        mode="a",
+                        encoding="utf-8") as f:
+                    f.write(json.dumps(log_stats) + "\n")
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

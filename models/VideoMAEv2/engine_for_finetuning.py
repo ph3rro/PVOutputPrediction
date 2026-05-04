@@ -150,12 +150,17 @@ def train_one_epoch(model: torch.nn.Module,
 
         if device.type=="cuda":
             torch.cuda.synchronize()
-        if mixup_fn is None:
-            class_acc = (output.max(-1)[-1] == pv_preds).float().mean()
-        else:
+        if model.model_task == 'regression':
             class_acc = None
+        else:
+            if mixup_fn is None:
+                class_acc = (output.max(-1)[-1] == pv_preds).float().mean()
+            else:
+                class_acc = None
+        
+            metric_logger.update(class_acc=class_acc)
+
         metric_logger.update(loss=loss_value)
-        metric_logger.update(class_acc=class_acc)
         metric_logger.update(loss_scale=loss_scale_value)
         min_lr = 10.
         max_lr = 0.
@@ -430,7 +435,7 @@ def final_test(data_loader, model, device, file, use_residual=False, residual_me
             metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
             metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
 
-    if not os.path.exists(file):
+    if not os.path.exists(file): # change 
         os.mknod(file)
 
     if model.model_task == 'regression':
