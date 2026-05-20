@@ -175,7 +175,7 @@ def get_args():
     parser.add_argument(
         '--warmup_lr',
         type=float,
-        default=1e-8,
+        default=1e-6,
         metavar='LR',
         help='warmup learning rate (default: 1e-6)')
     parser.add_argument(
@@ -907,6 +907,8 @@ def main(args, ds_init):
             wd_schedule_values=wd_schedule_values,
             num_training_steps_per_epoch=num_training_steps_per_epoch,
             update_freq=args.update_freq,
+            residual_mean=residual_mean,
+            residual_std=residual_std,
         )
         if args.output_dir and args.save_ckpt:
             _epoch = epoch + 1

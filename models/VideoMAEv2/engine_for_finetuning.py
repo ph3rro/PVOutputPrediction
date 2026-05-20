@@ -50,7 +50,9 @@ def train_one_epoch(model: torch.nn.Module,
                     lr_schedule_values=None,
                     wd_schedule_values=None,
                     num_training_steps_per_epoch=None,
-                    update_freq=None):
+                    update_freq=None,
+                    residual_mean: float = 0.0,
+                    residual_std: float = 1.0):
     model.train(True)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter(
@@ -152,6 +154,15 @@ def train_one_epoch(model: torch.nn.Module,
             torch.cuda.synchronize()
         if model.model_task == 'regression':
             class_acc = None
+            if use_residual:
+                pred_norm = output.float().squeeze(-1) + pv_logs[:, -1]
+            else:
+                pred_norm = output.float().squeeze(-1)
+            target_norm = pv_preds
+            pred_raw = pred_norm * residual_std + residual_mean
+            target_raw = target_norm * residual_std + residual_mean
+            mae_raw = torch.nn.functional.l1_loss(pred_raw, target_raw).item()
+            metric_logger.update(mae_raw=mae_raw)
         else:
             if mixup_fn is None:
                 class_acc = (output.max(-1)[-1] == pv_preds).float().mean()
@@ -180,6 +191,8 @@ def train_one_epoch(model: torch.nn.Module,
         if log_writer is not None:
             log_writer.update(loss=loss_value, head="loss")
             log_writer.update(class_acc=class_acc, head="loss")
+            if model.model_task == 'regression':
+                log_writer.update(mae_raw=mae_raw, head="loss")
             log_writer.update(loss_scale=loss_scale_value, head="opt")
             log_writer.update(lr=max_lr, head="opt")
             log_writer.update(min_lr=min_lr, head="opt")
