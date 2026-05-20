@@ -111,6 +111,8 @@ class PVRegressionDataset(Dataset):
 
         pv_log_train, pv_log_val = pv_log_trainval[train_indices], pv_log_trainval[val_indices]
         pv_pred_train, pv_pred_val = pv_pred_trainval[train_indices], pv_pred_trainval[val_indices]
+        if not use_h5:
+            cloudiness_train = cloudiness_trainval[train_indices]
 
         # Compute normalization stats from training residuals (always use training stats)
         _pv_log_last = np.array([np.asarray(row)[-1] for row in pv_log_train], dtype=np.float32)
@@ -118,6 +120,13 @@ class PVRegressionDataset(Dataset):
         train_residuals = _pv_pred - _pv_log_last
         self.residual_mean = float(np.mean(train_residuals))
         self.residual_std = float(np.std(train_residuals)) or 1.0
+
+        if not use_h5 and hasattr(args, 'cloudiness_threshold') and args.cloudiness_threshold > 0.0:
+            mask = cloudiness_train > args.cloudiness_threshold
+            dataset_samples_train = dataset_samples_train[mask]
+            pv_log_train = pv_log_train[mask]
+            pv_pred_train = pv_pred_train[mask]
+            print(f"Cloudiness filter: keeping {mask.sum()} / {len(mask)} training samples with cloudiness > {args.cloudiness_threshold}")
 
         # temporary testing
         #image_log_train = image_log_train[1000:1100]

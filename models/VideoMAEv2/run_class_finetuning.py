@@ -307,6 +307,7 @@ def get_args():
     parser.add_argument(
         '--use_cls', action='store_false', dest='use_mean_pooling')
 
+    parser.add_argument('--cloudiness_threshold', type=float, default=0.0, help='Cloudiness threshold for finetuning on cloudy data')
     parser.add_argument('--use_residual', action='store_true', default=False, help='Have model predict the delta between current PV and future PV instead of future PV')
     # Dataset parameters
     parser.add_argument(
