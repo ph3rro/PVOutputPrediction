@@ -20,11 +20,9 @@ from timm.utils import ModelEma, accuracy
 import utils
 from dataset.pvhelperfunctions import calculate_crps
 
-def train_class_batch(model, samples, pv, target, criterion, use_residual):
-    if use_residual:
-        target = target - pv[:,-1].squeeze(-1)
-    outputs = model(samples, pv)
-    loss = criterion(outputs.float().squeeze(-1), target)
+def train_class_batch(model, samples, pv_log_norm, target_norm, criterion):
+    outputs = model(samples, pv_log_norm)
+    loss = criterion(outputs.float().squeeze(-1), target_norm)
     return loss, outputs
 
 
@@ -51,6 +49,8 @@ def train_one_epoch(model: torch.nn.Module,
                     wd_schedule_values=None,
                     num_training_steps_per_epoch=None,
                     update_freq=None,
+                    pv_log_mean: float = 0.0,
+                    pv_log_std: float = 1.0,
                     residual_mean: float = 0.0,
                     residual_std: float = 1.0):
     model.train(True)
@@ -91,28 +91,29 @@ def train_one_epoch(model: torch.nn.Module,
         pv_logs = pv_logs.to(device, non_blocking=True)
         pv_preds = pv_preds.to(device, non_blocking=True)
 
+        pv_logs_norm = (pv_logs - pv_log_mean) / pv_log_std
+        if use_residual:
+            target_norm = (pv_preds - pv_logs[:, -1] - residual_mean) / residual_std
+        else:
+            target_norm = (pv_preds - pv_log_mean) / pv_log_std
+
         if mixup_fn is not None:
             # mixup handle 3th & 4th dimension
             B, C, T, H, W = image_logs.shape
             image_logs = image_logs.view(B, C * T, H, W)
-            image_logs, pv_preds = mixup_fn(image_logs, pv_preds)
-            
+            image_logs, target_norm = mixup_fn(image_logs, target_norm)
+
             image_logs = image_logs.view(B, C, T, H, W)
 
         if loss_scaler is None:
             image_logs = image_logs.half()
-            loss, output = train_class_batch(model, image_logs, pv_logs, pv_preds,
-                                             criterion, use_residual)
+            loss, output = train_class_batch(model, image_logs, pv_logs_norm, target_norm,
+                                             criterion)
 
         else:
             with torch.amp.autocast(device.type,dtype=torch.bfloat16): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
-                #print("pv_preds before 2nd:", pv_preds)
-                loss, output = train_class_batch(model, image_logs, pv_logs, pv_preds,
-                                                 criterion, use_residual)
-                #print("loss:", loss.item())
-                #print("output:", output.shape)
-                #print("output:", output)
-                #print("pv_preds:", pv_preds)
+                loss, output = train_class_batch(model, image_logs, pv_logs_norm, target_norm,
+                                                 criterion)
 
         loss_value = loss.item()
 
@@ -208,7 +209,8 @@ def train_one_epoch(model: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device, use_residual=False, residual_mean=0.0, residual_std=1.0):
+def validation_one_epoch(data_loader, model, device, use_residual=False,
+                          pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -230,15 +232,16 @@ def validation_one_epoch(data_loader, model, device, use_residual=False, residua
 
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
-            output = model(images, pv_log)
+            pv_log_norm = (pv_log - pv_log_mean) / pv_log_std
+            output = model(images, pv_log_norm)
             if use_residual:
-                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+                pv_pred_norm = (pv_pred - pv_log[:, -1] - residual_mean) / residual_std
+                absolute_output = output.squeeze(-1) * residual_std + residual_mean + pv_log[:, -1]
             else:
-                pred_norm = output.squeeze(-1)
-            loss = criterion(pred_norm, pv_pred)
-            # denormalize to original kW scale for interpretable metrics
-            absolute_output = pred_norm * residual_std + residual_mean
-            pv_pred_raw = pv_pred * residual_std + residual_mean
+                pv_pred_norm = (pv_pred - pv_log_mean) / pv_log_std
+                absolute_output = output.squeeze(-1) * pv_log_std + pv_log_mean
+            loss = criterion(output.squeeze(-1), pv_pred_norm)
+            pv_pred_raw = pv_pred
 
         if model.model_task == 'regression':
             mse = torch.nn.functional.mse_loss(absolute_output, pv_pred_raw)
@@ -275,7 +278,8 @@ def validation_one_epoch(data_loader, model, device, use_residual=False, residua
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 @torch.no_grad()
-def test_and_save_outputs(data_loader, model, device, data_path, use_residual=False, residual_mean=0.0, residual_std=1.0):
+def test_and_save_outputs(data_loader, model, device, data_path, use_residual=False,
+                           pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -297,15 +301,16 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
 
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
-            output = model(images, pv_log)
+            pv_log_norm = (pv_log - pv_log_mean) / pv_log_std
+            output = model(images, pv_log_norm)
             if use_residual:
-                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+                pv_pred_norm = (pv_pred - pv_log[:, -1] - residual_mean) / residual_std
+                absolute_output = output.squeeze(-1) * residual_std + residual_mean + pv_log[:, -1]
             else:
-                pred_norm = output.squeeze(-1)
-            loss = criterion(pred_norm, pv_pred)
-            # denormalize to original kW scale
-            absolute_output = pred_norm * residual_std + residual_mean
-            pv_pred_raw = pv_pred * residual_std + residual_mean
+                pv_pred_norm = (pv_pred - pv_log_mean) / pv_log_std
+                absolute_output = output.squeeze(-1) * pv_log_std + pv_log_mean
+            loss = criterion(output.squeeze(-1), pv_pred_norm)
+            pv_pred_raw = pv_pred
             outputs.append(absolute_output.detach().cpu())
 
         if model.model_task == 'regression':
@@ -325,7 +330,8 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=False, residual_mean=0.0, residual_std=1.0):
+def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=False,
+                    pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test with CRPS:'
@@ -350,22 +356,20 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=Fa
             # Apply this function to every layer in the model
             model.apply(enable_dropout)
 
-            # 3. Run the loop — denormalize each member to kW scale
+            pv_log_norm = (pv_log - pv_log_mean) / pv_log_std
             predictions = []
             with torch.no_grad():
                 for _ in range(ensemble_size):
-                    pred = model(images, pv_log)
+                    pred = model(images, pv_log_norm)
                     if use_residual:
-                        pred_norm = pred + pv_log[:, -1].unsqueeze(-1)
+                        pred_raw = pred * residual_std + residual_mean + pv_log[:, -1].unsqueeze(-1)
                     else:
-                        pred_norm = pred
-                    pred_raw = pred_norm * residual_std + residual_mean
+                        pred_raw = pred * pv_log_std + pv_log_mean
                     predictions.append(pred_raw)
 
-            # 4. Stack and Calculate Statistics
             # Stack shape: [ensemble_size, batch_size, output_dim]
             stack = torch.stack(predictions)
-            pv_pred_raw = pv_pred * residual_std + residual_mean
+            pv_pred_raw = pv_pred
             crps = calculate_crps(stack, pv_pred_raw)
 
         if model.model_task == 'regression':
@@ -384,7 +388,8 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=Fa
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file, use_residual=False, residual_mean=0.0, residual_std=1.0):
+def final_test(data_loader, model, device, file, use_residual=False,
+               pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
     if model.model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -410,15 +415,16 @@ def final_test(data_loader, model, device, file, use_residual=False, residual_me
 
         # compute output
         with torch.amp.autocast(device.type): # replace torch.cuda.amp.autocast() with torch.amp.autocast("cuda")
-            output = model(images, pv_log)
+            pv_log_norm = (pv_log - pv_log_mean) / pv_log_std
+            output = model(images, pv_log_norm)
             if use_residual:
-                pred_norm = output.squeeze(-1) + pv_log[:, -1]
+                target_norm = (target - pv_log[:, -1] - residual_mean) / residual_std
+                absolute_output = output.squeeze(-1) * residual_std + residual_mean + pv_log[:, -1]
             else:
-                pred_norm = output.squeeze(-1)
-            loss = criterion(pred_norm, target)
-            # denormalize to original kW scale
-            absolute_output = pred_norm * residual_std + residual_mean
-            target_raw = target * residual_std + residual_mean
+                target_norm = (target - pv_log_mean) / pv_log_std
+                absolute_output = output.squeeze(-1) * pv_log_std + pv_log_mean
+            loss = criterion(output.squeeze(-1), target_norm)
+            target_raw = target
 
         for i in range(absolute_output.size(0)):
             string = "{} {} {} {} {}\n".format(

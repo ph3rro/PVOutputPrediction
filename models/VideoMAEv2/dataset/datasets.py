@@ -114,7 +114,14 @@ class PVRegressionDataset(Dataset):
         if not use_h5:
             cloudiness_train = cloudiness_trainval[train_indices]
 
-        # Compute normalization stats from training residuals (always use training stats)
+        # Absolute PV stats for normalizing pv_log input.
+        # Take first 2 values per sample (= stride between samples) to cover each
+        # unique time point exactly once without overlap.
+        _pv_log_unique = np.array([np.asarray(row, dtype=np.float32)[:2] for row in pv_log_train]).flatten()
+        self.pv_log_mean = float(np.mean(_pv_log_unique))
+        self.pv_log_std = float(np.std(_pv_log_unique)) or 1.0
+
+        # Residual stats for normalizing pv_pred target
         _pv_log_last = np.array([np.asarray(row)[-1] for row in pv_log_train], dtype=np.float32)
         _pv_pred = np.asarray(pv_pred_train, dtype=np.float32)
         train_residuals = _pv_pred - _pv_log_last
@@ -219,8 +226,8 @@ class PVRegressionDataset(Dataset):
             #print("pv_pred shape: ", self.pv_pred.shape)
             #print("pv_pred: ", self.pv_pred[index])
             # Convert to float32 and normalize by residual statistics
-            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
-            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
+            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
             return buffer, pv_log, pv_pred, index # We are adding pv_log as an additional input
 
             # Note: Looking at run_class_finetuning.py, it seems that the last two values are not used for train and validation, only for test
@@ -235,8 +242,8 @@ class PVRegressionDataset(Dataset):
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 and normalize by residual statistics
-            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
-            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
+            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
             return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
             # WE ARE NOT USING the crop part of the data_transform FOR NOW
             
@@ -251,8 +258,8 @@ class PVRegressionDataset(Dataset):
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 and normalize by residual statistics
-            pv_log = (torch.tensor(self.pv_log[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
-            pv_pred = (torch.tensor(self.pv_pred[index], dtype=torch.float32) - self.residual_mean) / self.residual_std
+            pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
+            pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
             return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input
         else:
             raise NameError('mode {} unkown'.format(self.mode))
