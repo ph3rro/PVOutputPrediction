@@ -241,7 +241,7 @@ class PVRegressionDataset(Dataset):
                 buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample))
             args = self.args
             buffer = self._aug_frame(buffer, args)
-            # Convert to float32 and normalize by residual statistics
+            # Convert to float32
             pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
             pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
             return buffer, pv_log, pv_pred, index, {} # We are adding pv_log as an additional input

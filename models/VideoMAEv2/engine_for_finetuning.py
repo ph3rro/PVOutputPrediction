@@ -156,13 +156,10 @@ def train_one_epoch(model: torch.nn.Module,
         if model.model_task == 'regression':
             class_acc = None
             if use_residual:
-                pred_norm = output.float().squeeze(-1) + pv_logs[:, -1]
+                pred_raw = output.float().squeeze(-1) * residual_std + residual_mean + pv_logs[:, -1]
             else:
-                pred_norm = output.float().squeeze(-1)
-            target_norm = pv_preds
-            pred_raw = pred_norm * residual_std + residual_mean
-            target_raw = target_norm * residual_std + residual_mean
-            mae_raw = torch.nn.functional.l1_loss(pred_raw, target_raw).item()
+                pred_raw = output.float().squeeze(-1) * pv_log_std + pv_log_mean
+            mae_raw = torch.nn.functional.l1_loss(pred_raw, pv_preds).item()
             metric_logger.update(mae_raw=mae_raw)
         else:
             if mixup_fn is None:
