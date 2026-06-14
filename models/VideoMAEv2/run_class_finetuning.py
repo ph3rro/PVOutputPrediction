@@ -309,6 +309,7 @@ def get_args():
 
     parser.add_argument('--cloudiness_threshold', type=float, default=0.0, help='Cloudiness threshold for finetuning on cloudy data')
     parser.add_argument('--use_residual', action='store_true', default=False, help='Have model predict the delta between current PV and future PV instead of future PV')
+    parser.add_argument('--pv_only', action='store_true', default=False, help='Train/eval on PV tokens only (drop video tokens) for a PV-only baseline')
     # Dataset parameters
     parser.add_argument(
         '--h5_path',
@@ -569,7 +570,8 @@ def main(args, ds_init):
         use_mean_pooling=args.use_mean_pooling,
         init_scale=args.init_scale,
         with_cp=args.with_checkpoint,
-        model_task = args.model_task
+        model_task = args.model_task,
+        pv_only=args.pv_only
     )
 
     summary(model)

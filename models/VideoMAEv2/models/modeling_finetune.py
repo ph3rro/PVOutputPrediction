@@ -383,9 +383,11 @@ class VisionTransformer(nn.Module):
                  tubelet_size=2,
                  use_mean_pooling=True,
                  with_cp=False,
-                 cos_attn=False):
+                 cos_attn=False,
+                 pv_only=False):
         super().__init__()
         self.num_classes = num_classes
+        self.pv_only = pv_only
         # num_features for consistency with other models
         self.num_features = self.embed_dim = embed_dim
         self.tubelet_size = tubelet_size
@@ -480,15 +482,24 @@ class VisionTransformer(nn.Module):
             self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     def forward_features(self, x, pv):
-        B = x.size(0)
-        x = self.patch_embed(x)
-        pv = self.pv_embed(pv).to(x.dtype)
-        x = torch.cat((x, pv), dim=1)
-        
-        if self.pos_embed is not None:
-            pos_embed = torch.cat((self.pos_embed, self.pv_pos_embed), dim=1)
-            x = x + pos_embed.expand(B, -1, -1).type_as(x).to(
-                x.device) # removed .clone().detach()
+        if self.pv_only:
+            B = pv.size(0)
+            # PV-only baseline: drop the video tokens entirely and feed the
+            # encoder just the PV tokens. Cast to the positional embedding dtype
+            # so the residual stream matches the (fp16/bf16/fp32) compute dtype.
+            x = self.pv_embed(pv)
+            x = x.to(self.pv_pos_embed.dtype)
+            x = x + self.pv_pos_embed.expand(B, -1, -1).type_as(x).to(x.device)
+        else:
+            B = x.size(0)
+            x = self.patch_embed(x)
+            pv = self.pv_embed(pv).to(x.dtype)
+            x = torch.cat((x, pv), dim=1)
+
+            if self.pos_embed is not None:
+                pos_embed = torch.cat((self.pos_embed, self.pv_pos_embed), dim=1)
+                x = x + pos_embed.expand(B, -1, -1).type_as(x).to(
+                    x.device) # removed .clone().detach()
         x = self.pos_drop(x)
 
         for blk in self.blocks:
