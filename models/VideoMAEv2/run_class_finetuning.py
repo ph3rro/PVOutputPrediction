@@ -170,6 +170,14 @@ def get_args():
         default=1e-3,
         metavar='LR',
         help='learning rate (default: 1e-3)')
+    parser.add_argument(
+        '--lr_after',
+        type=float,
+        default=None,
+        metavar='LR',
+        help='If set, drop the learning rate to this value at --cloudiness_switch_epoch '
+             'and rebuild the LR schedule for the remaining epochs. Scaled by '
+             'total_batch_size/256 like --lr.')
     parser.add_argument('--layer_decay', type=float, default=0.75)
 
     parser.add_argument(
@@ -308,6 +316,18 @@ def get_args():
         '--use_cls', action='store_false', dest='use_mean_pooling')
 
     parser.add_argument('--cloudiness_threshold', type=float, default=0.0, help='Cloudiness threshold for finetuning on cloudy data')
+    parser.add_argument(
+        '--cloudiness_threshold_after',
+        type=float,
+        default=None,
+        help='If set, switch the cloudiness_threshold to this value at --cloudiness_switch_epoch '
+             'and rebuild the train dataset/dataloader (and remaining LR/WD schedules).')
+    parser.add_argument(
+        '--cloudiness_switch_epoch',
+        type=int,
+        default=30,
+        help='Epoch at which to switch the cloudiness_threshold and rebuild the train '
+             'dataset/dataloader. Only takes effect if --cloudiness_threshold_after is set.')
     parser.add_argument('--use_residual', action='store_true', default=False, help='Have model predict the delta between current PV and future PV instead of future PV')
     parser.add_argument('--pv_only', action='store_true', default=False, help='Train/eval on PV tokens only (drop video tokens) for a PV-only baseline')
     # Dataset parameters
@@ -747,6 +767,9 @@ def main(args, ds_init):
     #########scale the lr#############
     args.min_lr = args.min_lr * total_batch_size / 256
     args.warmup_lr = args.warmup_lr * total_batch_size / 256
+    if args.lr_after is not None:
+        args.lr_after = args.lr_after if total_batch_size == 2 else args.lr_after * total_batch_size / 256
+        print("LR after switch = %.8f" % args.lr_after)
     #########scale the lr#############
     print("LR = %.8f" % args.lr)
     print("Batch size = %d" % total_batch_size)
@@ -888,12 +911,111 @@ def main(args, ds_init):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_accuracy = 0.0
+    # phase_start_epoch marks the first epoch that uses the current
+    # lr_schedule_values / wd_schedule_values. start_steps for the schedule is
+    # always relative to this epoch so the schedule can be rebuilt mid-training
+    # (e.g. when the cloudiness threshold changes and steps-per-epoch shifts).
+    # The initial schedule covers epochs 0..args.epochs, so the initial phase
+    # starts at 0 (not args.start_epoch) to keep indexing correct on resume.
+    phase_start_epoch = 0
+    # Monotonic tensorboard step counter, kept independent of phase resets.
+    tb_step = args.start_epoch * num_training_steps_per_epoch * args.update_freq
+    phase_switched = False
     for epoch in range(args.start_epoch, args.epochs):
+        rebuild_dataset = (
+            args.cloudiness_threshold_after is not None
+            and args.cloudiness_threshold_after != args.cloudiness_threshold
+        )
+        rebuild_lr = args.lr_after is not None
+        if (
+            not phase_switched
+            and epoch >= args.cloudiness_switch_epoch
+            and (rebuild_dataset or rebuild_lr)
+        ):
+            if rebuild_dataset:
+                old_threshold = args.cloudiness_threshold
+                args.cloudiness_threshold = args.cloudiness_threshold_after
+                if utils.is_main_process():
+                    print(
+                        f"[Epoch {epoch}] Switching cloudiness_threshold "
+                        f"{old_threshold} -> {args.cloudiness_threshold}; "
+                        f"rebuilding train dataset and dataloader."
+                    )
+
+                # Rebuild only the train dataset/sampler/dataloader. Val and
+                # test splits don't apply the cloudiness filter, so they're
+                # untouched.
+                dataset_train, _ = build_dataset(
+                    is_train=True, test_mode=False, args=args)
+                sampler_train = torch.utils.data.DistributedSampler(
+                    dataset_train,
+                    num_replicas=num_tasks,
+                    rank=global_rank,
+                    shuffle=True)
+                data_loader_train = torch.utils.data.DataLoader(
+                    dataset_train,
+                    sampler=sampler_train,
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=args.pin_mem,
+                    drop_last=True,
+                    collate_fn=collate_func,
+                    persistent_workers=True)
+
+                old_num_training_steps_per_epoch = num_training_steps_per_epoch
+                num_training_steps_per_epoch = len(dataset_train) // total_batch_size
+                print(
+                    f"Rebuilt train dataset: {len(dataset_train)} samples, "
+                    f"{num_training_steps_per_epoch} steps per epoch "
+                    f"(was {old_num_training_steps_per_epoch})."
+                )
+            else:
+                old_num_training_steps_per_epoch = num_training_steps_per_epoch
+
+            # Choose the new base LR for the remaining-epoch cosine schedule:
+            # explicit --lr_after if provided, otherwise the LR currently in
+            # effect (preserves schedule continuity).
+            old_phase_step = (epoch - phase_start_epoch) * old_num_training_steps_per_epoch
+            current_lr = float(
+                lr_schedule_values[min(old_phase_step, len(lr_schedule_values) - 1)]
+            )
+            current_wd = float(
+                wd_schedule_values[min(old_phase_step, len(wd_schedule_values) - 1)]
+            )
+            new_base_lr = args.lr_after if args.lr_after is not None else current_lr
+            if rebuild_lr and utils.is_main_process():
+                print(
+                    f"[Epoch {epoch}] Lowering learning rate "
+                    f"{current_lr:.3e} -> {new_base_lr:.3e}; rebuilding LR schedule."
+                )
+
+            remaining_epochs = max(args.epochs - epoch, 1)
+            # Short warmup at the phase boundary smooths the LR jump from the
+            # end of phase 1 (~min_lr) to new_base_lr on the same step that the
+            # dataset distribution also shifts. Falls back to no warmup when
+            # remaining_epochs == 1 to keep the cosine well-defined.
+            switch_warmup_epochs = 1 if remaining_epochs > 1 else 0
+            lr_schedule_values = utils.cosine_scheduler(
+                new_base_lr,
+                args.min_lr,
+                remaining_epochs,
+                num_training_steps_per_epoch,
+                warmup_epochs=switch_warmup_epochs,
+                warmup_steps=0,
+            )
+            wd_schedule_values = utils.cosine_scheduler(
+                current_wd,
+                args.weight_decay_end,
+                remaining_epochs,
+                num_training_steps_per_epoch,
+            )
+            phase_start_epoch = epoch
+            phase_switched = True
+
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
-            log_writer.set_step(epoch * num_training_steps_per_epoch *
-                                args.update_freq)
+            log_writer.set_step(tb_step)
         train_stats = train_one_epoch(
             model,
             args.use_residual,
@@ -907,7 +1029,7 @@ def main(args, ds_init):
             model_ema,
             mixup_fn,
             log_writer=log_writer,
-            start_steps=epoch * num_training_steps_per_epoch,
+            start_steps=(epoch - phase_start_epoch) * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values,
             wd_schedule_values=wd_schedule_values,
             num_training_steps_per_epoch=num_training_steps_per_epoch,
@@ -917,6 +1039,7 @@ def main(args, ds_init):
             residual_mean=residual_mean,
             residual_std=residual_std,
         )
+        tb_step += num_training_steps_per_epoch * args.update_freq
         if args.output_dir and args.save_ckpt:
             _epoch = epoch + 1
             if _epoch % args.save_ckpt_freq == 0 or _epoch == args.epochs:
@@ -997,7 +1120,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file, args.use_residual, pv_log_mean, pv_log_std, residual_mean, residual_std)
+    '''test_stats = final_test(data_loader_test, model, device, preds_file, args.use_residual, pv_log_mean, pv_log_std, residual_mean, residual_std)
     if utils.is_dist_avail_and_initialized():
         torch.distributed.barrier()
 
@@ -1015,7 +1138,7 @@ def main(args, ds_init):
                         mode="a",
                         encoding="utf-8") as f:
                     f.write(json.dumps(log_stats) + "\n")
-
+    '''
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
