@@ -384,10 +384,14 @@ class VisionTransformer(nn.Module):
                  use_mean_pooling=True,
                  with_cp=False,
                  cos_attn=False,
-                 pv_only=False):
+                 pv_only=False,
+                 video_only=False):
         super().__init__()
+        if pv_only and video_only:
+            raise ValueError("pv_only and video_only are mutually exclusive")
         self.num_classes = num_classes
         self.pv_only = pv_only
+        self.video_only = video_only
         # num_features for consistency with other models
         self.num_features = self.embed_dim = embed_dim
         self.tubelet_size = tubelet_size
@@ -490,6 +494,13 @@ class VisionTransformer(nn.Module):
             x = self.pv_embed(pv)
             x = x.to(self.pv_pos_embed.dtype)
             x = x + self.pv_pos_embed.expand(B, -1, -1).type_as(x).to(x.device)
+        elif self.video_only:
+            B = x.size(0)
+            # Video-only baseline: drop the PV tokens entirely and feed the
+            # encoder just the video tokens.
+            x = self.patch_embed(x)
+            if self.pos_embed is not None:
+                x = x + self.pos_embed.expand(B, -1, -1).type_as(x).to(x.device)
         else:
             B = x.size(0)
             x = self.patch_embed(x)

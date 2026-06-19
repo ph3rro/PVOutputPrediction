@@ -330,6 +330,7 @@ def get_args():
              'dataset/dataloader. Only takes effect if --cloudiness_threshold_after is set.')
     parser.add_argument('--use_residual', action='store_true', default=False, help='Have model predict the delta between current PV and future PV instead of future PV')
     parser.add_argument('--pv_only', action='store_true', default=False, help='Train/eval on PV tokens only (drop video tokens) for a PV-only baseline')
+    parser.add_argument('--video_only', action='store_true', default=False, help='Train/eval on video tokens only (drop PV tokens) for a video-only baseline')
     # Dataset parameters
     parser.add_argument(
         '--h5_path',
@@ -459,6 +460,9 @@ def main(args, ds_init):
         utils.create_ds_config(args)
 
     print(args)
+
+    if args.pv_only and args.video_only:
+        raise ValueError("--pv_only and --video_only are mutually exclusive")
 
     device = torch.device(args.device)
     print(device)
@@ -591,7 +595,8 @@ def main(args, ds_init):
         init_scale=args.init_scale,
         with_cp=args.with_checkpoint,
         model_task = args.model_task,
-        pv_only=args.pv_only
+        pv_only=args.pv_only,
+        video_only=args.video_only
     )
 
     summary(model)
