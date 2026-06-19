@@ -811,7 +811,7 @@ def main(args, ds_init):
     else:
         if args.distributed:
             model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[args.gpu], find_unused_parameters=False)
+                model, device_ids=[args.gpu], find_unused_parameters=args.pv_only)
             model_without_ddp = model.module
 
         optimizer = create_optimizer(
@@ -910,7 +910,8 @@ def main(args, ds_init):
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
-    max_accuracy = 0.0
+    max_accuracy = 0
+    min_mse = float('inf')
     # phase_start_epoch marks the first epoch that uses the current
     # lr_schedule_values / wd_schedule_values. start_steps for the schedule is
     # always relative to this epoch so the schedule can be rebuilt mid-training
@@ -1056,8 +1057,8 @@ def main(args, ds_init):
             test_stats = validation_one_epoch(data_loader_val, model, device, args.use_residual, pv_log_mean, pv_log_std, residual_mean, residual_std)
             if args.model_task == 'regression':
                 print(f"MSE of the network on the {len(dataset_val)} val images: {test_stats['mse']:.4f}")
-                if max_accuracy < -test_stats["mse"]:  # Convert MSE to negative for "higher is better"
-                    max_accuracy = -test_stats["mse"]
+                if test_stats["mse"] < min_mse:  # Convert MSE to negative for "higher is better"
+                    min_mse = test_stats["mse"]
                     if args.output_dir and args.save_ckpt:
                         utils.save_model(
                             args=args,
@@ -1067,7 +1068,7 @@ def main(args, ds_init):
                             loss_scaler=loss_scaler,
                             epoch="best",
                             model_ema=model_ema)
-                print(f'Min MSE: {-max_accuracy:.4f}')
+                print(f'Min MSE: {min_mse:.4f}')
                 if log_writer is not None:
                     log_writer.update(val_mse=test_stats['mse'], head="perf", step=epoch)
                     #log_writer.update(val_mae=test_stats['mae'], head="perf", step=epoch)

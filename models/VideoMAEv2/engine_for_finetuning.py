@@ -323,7 +323,7 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
 
     if outputs:
         outputs = torch.cat(outputs, dim=0)
-        np.save(os.path.join(data_path, 'predictions.npy'), outputs.numpy())
+        np.save(os.path.join(data_path, 'predictions_cloudy_finetune.npy'), outputs.numpy())
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
