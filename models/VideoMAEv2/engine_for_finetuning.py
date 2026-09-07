@@ -20,6 +20,10 @@ from timm.utils import ModelEma, accuracy
 import utils
 from dataset.pvhelperfunctions import calculate_crps
 
+
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
 def train_class_batch(model, samples, pv_log_norm, target_norm, criterion):
     outputs = model(samples, pv_log_norm)
     loss = criterion(outputs.float().squeeze(-1), target_norm)
@@ -153,7 +157,7 @@ def train_one_epoch(model: torch.nn.Module,
 
         if device.type=="cuda":
             torch.cuda.synchronize()
-        if model.model_task == 'regression':
+        if unwrap_model(model).model_task == 'regression':
             class_acc = None
             if use_residual:
                 pred_raw = output.float().squeeze(-1) * residual_std + residual_mean + pv_logs[:, -1]
@@ -189,7 +193,7 @@ def train_one_epoch(model: torch.nn.Module,
         if log_writer is not None:
             log_writer.update(loss=loss_value, head="loss")
             log_writer.update(class_acc=class_acc, head="loss")
-            if model.model_task == 'regression':
+            if unwrap_model(model).model_task == 'regression':
                 log_writer.update(mae_raw=mae_raw, head="loss")
             log_writer.update(loss_scale=loss_scale_value, head="opt")
             log_writer.update(lr=max_lr, head="opt")
@@ -208,7 +212,7 @@ def train_one_epoch(model: torch.nn.Module,
 @torch.no_grad()
 def validation_one_epoch(data_loader, model, device, use_residual=False,
                           pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
         criterion = torch.nn.CrossEntropyLoss()
@@ -240,7 +244,7 @@ def validation_one_epoch(data_loader, model, device, use_residual=False,
             loss = criterion(output.squeeze(-1), pv_pred_norm)
             pv_pred_raw = pv_pred
 
-        if model.model_task == 'regression':
+        if unwrap_model(model).model_task == 'regression':
             mse = torch.nn.functional.mse_loss(absolute_output, pv_pred_raw)
             mae = torch.nn.functional.l1_loss(absolute_output, pv_pred_raw)
             
@@ -257,7 +261,7 @@ def validation_one_epoch(data_loader, model, device, use_residual=False,
             metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         print(
             '* MSE {mse.global_avg:.4f} MAE {mae.global_avg:.4f} loss {losses.global_avg:.4f}'
             .format(
@@ -277,7 +281,7 @@ def validation_one_epoch(data_loader, model, device, use_residual=False,
 @torch.no_grad()
 def test_and_save_outputs(data_loader, model, device, data_path, use_residual=False,
                            pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
         criterion = torch.nn.CrossEntropyLoss()
@@ -310,7 +314,7 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
             pv_pred_raw = pv_pred
             outputs.append(absolute_output.detach().cpu())
 
-        if model.model_task == 'regression':
+        if unwrap_model(model).model_task == 'regression':
             mse = torch.nn.functional.mse_loss(absolute_output, pv_pred_raw)
             mae = torch.nn.functional.l1_loss(absolute_output, pv_pred_raw)
             
@@ -323,7 +327,7 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
 
     if outputs:
         outputs = torch.cat(outputs, dim=0)
-        np.save(os.path.join(data_path, 'predictions_cloudy_finetune.npy'), outputs.numpy())
+        np.save(os.path.join(data_path, 'predictions_uoh_pretrained.npy'), outputs.numpy())
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
@@ -369,14 +373,14 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=Fa
             pv_pred_raw = pv_pred
             crps = calculate_crps(stack, pv_pred_raw)
 
-        if model.model_task == 'regression':
+        if unwrap_model(model).model_task == 'regression':
             
             batch_size = images.shape[0]
             metric_logger.meters['crps'].update(crps.item(), n=batch_size)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         print(
             '* CRPS {crps.global_avg:.4f}'
             .format(
@@ -387,7 +391,7 @@ def test_with_CRPS(data_loader, model, device, ensemble_size=50, use_residual=Fa
 @torch.no_grad()
 def final_test(data_loader, model, device, file, use_residual=False,
                pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
         criterion = torch.nn.CrossEntropyLoss()
@@ -432,7 +436,7 @@ def final_test(data_loader, model, device, file, use_residual=False,
                 )
             final_result.append(string)
 
-        if model.model_task == 'regression':
+        if unwrap_model(model).model_task == 'regression':
 
             # For regression, calculate MSE and MAE
             mse = torch.nn.functional.mse_loss(absolute_output, target_raw)
@@ -454,7 +458,7 @@ def final_test(data_loader, model, device, file, use_residual=False,
     if not os.path.exists(file): # change 
         os.mknod(file)
 
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         with open(file, 'w') as f:
             f.write("{}, {}\n".format(metric_logger.mse.global_avg, metric_logger.mae.global_avg))
             for line in final_result:
@@ -468,7 +472,7 @@ def final_test(data_loader, model, device, file, use_residual=False,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     
-    if model.model_task == 'regression':
+    if unwrap_model(model).model_task == 'regression':
         print('* MSE {mse.global_avg:.4f} MAE {mae.global_avg:.4f} loss {losses.global_avg:.4f}'
               .format(mse=metric_logger.mse, mae=metric_logger.mae, losses=metric_logger.loss))
     else:

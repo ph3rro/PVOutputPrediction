@@ -343,6 +343,12 @@ def get_args():
         type=str,
         help='path to folder containing trainval and test videos + metadata')
     parser.add_argument(
+        '--lmdb_path',
+        default='',
+        type=str,
+        help='If set, load 16-frame clips from this LMDB using parquet '
+             'video_key/start_idx instead of cut videos on disk.')
+    parser.add_argument(
         '--data_root', default='', type=str, help='dataset path root')
     parser.add_argument(
         '--eval_data_path',

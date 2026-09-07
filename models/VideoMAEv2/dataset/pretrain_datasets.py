@@ -1,6 +1,9 @@
+import io
 import os
+import pickle
 import random
 
+import lmdb
 import numpy as np
 import torch
 from PIL import Image
@@ -547,3 +550,218 @@ class VideoMAE(torch.utils.data.Dataset):
                 if offset + self.new_step < duration:
                     offset += self.new_step
         return frame_id_list
+
+
+class LMDBVideoMAE(VideoMAE):
+    """VideoMAE pretraining dataset backed by one LMDB value per video.
+
+    Each non-metadata key in the database identifies a video. Its value is a
+    pickled list of encoded image bytes, as written by build_uoh_lmdb.py.
+    LMDB environments are opened lazily in each DataLoader worker because an
+    environment must not be shared across forked processes.
+    """
+
+    def __init__(self,
+                 lmdb_path,
+                 new_length=16,
+                 new_step=4,
+                 transform=None,
+                 temporal_jitter=False,
+                 num_sample=1,
+                 key_limit=None,
+                 clip_stride_minutes=None):
+        super().__init__(
+            root='',
+            setting='',
+            train=True,
+            test_mode=False,
+            is_color=True,
+            modality='rgb',
+            num_segments=1,
+            num_crop=1,
+            new_length=new_length,
+            new_step=new_step,
+            transform=transform,
+            temporal_jitter=temporal_jitter,
+            lazy_init=True,
+            num_sample=num_sample)
+
+        self.lmdb_path = os.path.abspath(lmdb_path)
+        self.clip_stride_minutes = clip_stride_minutes
+        if not os.path.isdir(self.lmdb_path):
+            raise FileNotFoundError(
+                f"LMDB directory does not exist: {self.lmdb_path}")
+
+        # Read keys without touching the large values. This also works for a
+        # partially built database that does not yet contain __keys__.
+        env = self._open_env()
+        with env.begin(write=False) as txn:
+            stored_keys = txn.get(b'__keys__')
+            if stored_keys is not None:
+                keys = pickle.loads(stored_keys)
+                keys = [
+                    key.encode('utf-8') if isinstance(key, str) else key
+                    for key in keys
+                ]
+            else:
+                keys = [
+                    key for key in txn.cursor().iternext(
+                        keys=True, values=False)
+                    if not key.startswith(b'__') and b'@' not in key
+                ]
+            stored_timestamps = txn.get(b'__timestamps__')
+            video_timestamps = (
+                pickle.loads(stored_timestamps)
+                if stored_timestamps is not None else None
+            )
+        env.close()
+
+        keys = sorted(keys)
+        if key_limit is not None:
+            keys = keys[:key_limit]
+
+        if clip_stride_minutes is not None:
+            if video_timestamps is None:
+                raise RuntimeError(
+                    "--clip_stride_minutes requires a minute-aligned LMDB")
+            self.clips = []
+            stride = int(clip_stride_minutes)
+            if stride < 1:
+                raise ValueError("clip_stride_minutes must be at least 1")
+            for key in keys:
+                stem = key.decode('utf-8')
+                timestamps = video_timestamps.get(stem, [])
+                run_start = 0
+                for end in range(1, len(timestamps) + 1):
+                    run_ended = (
+                        end == len(timestamps)
+                        or timestamps[end] - timestamps[end - 1] != 60
+                    )
+                    if not run_ended:
+                        continue
+                    last_start = end - self.new_length
+                    for start in range(
+                            run_start, last_start + 1, stride):
+                        self.clips.append((key, start))
+                    run_start = end
+            self.video_timestamps = video_timestamps
+        else:
+            self.clips = keys
+            self.video_timestamps = None
+
+        if not self.clips:
+            raise RuntimeError(f"No video entries found in {self.lmdb_path}")
+
+        self._env = None
+        if clip_stride_minutes is None:
+            print(
+                f"Loaded {len(self.clips)} LMDB videos from {self.lmdb_path}")
+        else:
+            print(
+                f"Loaded {len(self.clips)} minute-aligned clips from "
+                f"{len(keys)} LMDB videos at a {clip_stride_minutes}-minute "
+                "stride")
+
+    def _open_env(self):
+        return lmdb.open(
+            self.lmdb_path,
+            subdir=True,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            max_readers=512)
+
+    def _get_env(self):
+        if self._env is None:
+            self._env = self._open_env()
+        return self._env
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_env'] = None
+        return state
+
+    def __del__(self):
+        env = getattr(self, '_env', None)
+        if env is not None:
+            env.close()
+
+    def _load_images(self, index):
+        clip = self.clips[index]
+        if isinstance(clip, tuple):
+            key, start = clip
+            stem = key.decode('utf-8')
+            timestamps = self.video_timestamps[stem][
+                start:start + self.new_length]
+            with self._get_env().begin(write=False, buffers=True) as txn:
+                encoded_frames = []
+                for timestamp in timestamps:
+                    frame_key = f"{stem}@{timestamp}".encode('utf-8')
+                    payload = txn.get(frame_key)
+                    if payload is None:
+                        raise KeyError(f"Missing LMDB key: {frame_key!r}")
+                    encoded_frames.append(bytes(payload))
+            return [
+                Image.open(io.BytesIO(frame)).convert('RGB')
+                for frame in encoded_frames
+            ]
+
+        key = clip
+        with self._get_env().begin(write=False, buffers=True) as txn:
+            payload = txn.get(key)
+            if payload is None:
+                raise KeyError(f"Missing LMDB key: {key!r}")
+            encoded_frames = pickle.loads(bytes(payload))
+
+        duration = len(encoded_frames)
+        if duration < self.skip_length:
+            raise RuntimeError(
+                f"{key.decode(errors='replace')} has {duration} frames; "
+                f"{self.skip_length} are required")
+
+        segment_indices, skip_offsets = self._sample_train_indices(duration)
+        frame_ids = self.get_frame_id_list(
+            duration, segment_indices, skip_offsets)
+        return [
+            Image.open(io.BytesIO(encoded_frames[frame_id])).convert('RGB')
+            for frame_id in frame_ids
+        ]
+
+    def __getitem__(self, index):
+        # Retry another video on isolated corruption without recursing forever.
+        for _ in range(10):
+            try:
+                images = self._load_images(index)
+                break
+            except Exception as exc:
+                clip = self.clips[index]
+                key = clip[0] if isinstance(clip, tuple) else clip
+                key = key.decode(errors='replace')
+                print(f"Failed to load LMDB video {key}: {exc}")
+                index = random.randrange(len(self.clips))
+        else:
+            raise RuntimeError("Failed to load 10 LMDB videos in a row")
+
+        if self.num_sample > 1:
+            process_data_list = []
+            encoder_mask_list = []
+            decoder_mask_list = []
+            for _ in range(self.num_sample):
+                process_data, encoder_mask, decoder_mask = self.transform(
+                    (images, None))
+                process_data = process_data.view(
+                    (self.new_length, 3) +
+                    process_data.size()[-2:]).transpose(0, 1)
+                process_data_list.append(process_data)
+                encoder_mask_list.append(encoder_mask)
+                decoder_mask_list.append(decoder_mask)
+            return (process_data_list, encoder_mask_list,
+                    decoder_mask_list)
+
+        process_data, encoder_mask, decoder_mask = self.transform(
+            (images, None))
+        process_data = process_data.view(
+            (self.new_length, 3) +
+            process_data.size()[-2:]).transpose(0, 1)
+        return process_data, encoder_mask, decoder_mask

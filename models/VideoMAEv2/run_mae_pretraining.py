@@ -48,6 +48,10 @@ def get_args():
     parser.add_argument('--tubelet_size', type=int, default=2)
     parser.add_argument(
         '--with_checkpoint', action='store_true', default=False)
+    parser.add_argument(
+        '--disable_compile',
+        action='store_true',
+        help='Disable torch.compile (useful for short smoke tests)')
 
     parser.add_argument(
         '--decoder_depth', default=4, type=int, help='depth of decoder')
@@ -197,6 +201,25 @@ def get_args():
     parser.add_argument(
         '--data_root', default='', type=str, help='dataset path root')
     parser.add_argument(
+        '--lmdb_path',
+        default=(
+            '/home/ubuntu/PVOutputPrediction/preprocessing/data/'
+            'uoh_lmdb_224/frames.lmdb'),
+        type=str,
+        help='LMDB directory. When set, data_path/data_root are ignored.')
+    parser.add_argument(
+        '--dataset_limit',
+        default=None,
+        type=int,
+        help='Use only the first N LMDB videos (for smoke tests)')
+    parser.add_argument(
+        '--clip_stride_minutes',
+        default=None,
+        type=int,
+        help=(
+            'For a minute-aligned LMDB, enumerate consecutive clips with '
+            'this many minutes between clip starts.'))
+    parser.add_argument(
         '--fname_tmpl',
         default='img_{:05}.jpg',
         type=str,
@@ -264,7 +287,8 @@ def get_model(args):
         decoder_depth=args.decoder_depth,
         with_cp=args.with_checkpoint)
 
-    if version.parse(torch.__version__) > version.parse('1.13.1'):
+    if (not args.disable_compile and
+            version.parse(torch.__version__) > version.parse('1.13.1')):
         torch.set_float32_matmul_precision('high')
         model = torch.compile(model)
 
@@ -327,7 +351,7 @@ def main(args):
         drop_last=True,
         collate_fn=collate_func,
         worker_init_fn=utils.seed_worker,
-        persistent_workers=True)
+        persistent_workers=args.num_workers > 0)
 
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location='cpu')

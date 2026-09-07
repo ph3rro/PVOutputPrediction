@@ -1,7 +1,12 @@
 # pylint: disable=line-too-long,too-many-lines,missing-docstring
 import os
 import warnings
+import io
+import pickle
+from collections import OrderedDict
 
+import cv2
+import lmdb
 import numpy as np
 import pandas as pd
 import torch
@@ -64,6 +69,10 @@ class PVRegressionDataset(Dataset):
         self.args = args
         self.aug = False
         self.rand_erase = False
+        self.lmdb_path = getattr(args, 'lmdb_path', None) or ''
+        self._lmdb_env = None
+        self._lmdb_cache = OrderedDict()
+        self._lmdb_cache_size = 8
 
         if self.mode in ['train']:
             self.aug = True
@@ -79,24 +88,45 @@ class PVRegressionDataset(Dataset):
             pv_log_test = f['test/pv_log']
             pv_pred_test = f['test/pv_pred']
         else:
-            self.video_loader = get_video_loader()
+            self.video_loader = None if self.lmdb_path else get_video_loader()
             cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_trainval", "metadata_with_cloudiness.parquet")) #changed to parquet
-            trainval_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy() 
-            #self.label_array = list(cleaned.values[:, 1])
-            times_trainval = list(cleaned.values[:, 1])
-            #print("type, ", type(cleaned.values[:,2][6]))
-            pv_log_trainval = np.array(cleaned.iloc[:, 2])
-            pv_pred_trainval = np.array(cleaned.iloc[:, 3])
-            cloudiness_trainval = np.array(cleaned.iloc[:, 4])
-            
+            if self.lmdb_path:
+                trainval_dataset_samples = np.array(
+                    list(zip(cleaned['video_key'].tolist(),
+                             cleaned['start_idx'].astype(int).tolist())),
+                    dtype=object)
+                times_trainval = [
+                    pd.Timestamp(t).to_pydatetime() for t in cleaned['time']]
+                pv_log_trainval = np.stack(
+                    [np.asarray(x, dtype=np.float32) for x in cleaned['pv_log']])
+                pv_pred_trainval = cleaned['pv_pred'].to_numpy(dtype=np.float32)
+                if 'cloudiness' in cleaned.columns:
+                    cloudiness_trainval = np.array(cleaned['cloudiness'])
+                else:
+                    cloudiness_trainval = np.zeros(len(cleaned), dtype=np.float32)
+            else:
+                trainval_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
+                times_trainval = list(cleaned.values[:, 1])
+                pv_log_trainval = np.array(cleaned.iloc[:, 2])
+                pv_pred_trainval = np.array(cleaned.iloc[:, 3])
+                cloudiness_trainval = np.array(cleaned.iloc[:, 4])
+
             cleaned = pd.read_parquet(os.path.join(self.data_path, "metadata_test", "metadata.parquet"))
-            test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
-            #self.label_array = list(cleaned.values[:, 1])
-            times_test = list(cleaned.values[:, 1])
-            #print("type, ", type(cleaned.values[:,2][6]))
-            pv_log_test = np.array(cleaned.iloc[:, 2]) 
-            pv_pred_test = np.array(cleaned.iloc[:, 3])
-            #cloudiness_test = np.array(cleaned.iloc[:, 4])
+            if self.lmdb_path:
+                test_dataset_samples = np.array(
+                    list(zip(cleaned['video_key'].tolist(),
+                             cleaned['start_idx'].astype(int).tolist())),
+                    dtype=object)
+                times_test = [
+                    pd.Timestamp(t).to_pydatetime() for t in cleaned['time']]
+                pv_log_test = np.stack(
+                    [np.asarray(x, dtype=np.float32) for x in cleaned['pv_log']])
+                pv_pred_test = cleaned['pv_pred'].to_numpy(dtype=np.float32)
+            else:
+                test_dataset_samples = cleaned.iloc[:, 0].apply(lambda row: os.path.join(self.data_root, row)).to_numpy()
+                times_test = list(cleaned.values[:, 1])
+                pv_log_test = np.array(cleaned.iloc[:, 2])
+                pv_pred_test = np.array(cleaned.iloc[:, 3])
         #print(f['trainval/image_log'][0])
         #print(f['trainval/pv_log'])
         #print(f['trainval/pv_pred'])
@@ -156,6 +186,8 @@ class PVRegressionDataset(Dataset):
                 self.dataset_samples = dataset_samples_val
             self.pv_log = pv_log_val
             self.pv_pred = pv_pred_val
+            if self.lmdb_path:
+                self._sort_lmdb_samples()
             '''self.data_transform = video_transforms.Compose([
                 # video_transforms.Resize(
                     # self.short_side_size, interpolation='bilinear'),
@@ -172,6 +204,8 @@ class PVRegressionDataset(Dataset):
                 self.dataset_samples = test_dataset_samples
             self.pv_log = pv_log_test
             self.pv_pred = pv_pred_test
+            if self.lmdb_path:
+                self._sort_lmdb_samples()
             '''self.data_resize = video_transforms.Compose([
                 video_transforms.Resize(
                     size=(short_side_size), interpolation='bilinear')
@@ -183,6 +217,15 @@ class PVRegressionDataset(Dataset):
             ])'''
 
 
+    def _sort_lmdb_samples(self):
+        order = sorted(
+            range(len(self.dataset_samples)),
+            key=lambda i: (self.dataset_samples[i][0], int(self.dataset_samples[i][1])),
+        )
+        self.dataset_samples = self.dataset_samples[order]
+        self.pv_log = self.pv_log[order]
+        self.pv_pred = self.pv_pred[order]
+
     def __getitem__(self, index):
         if self.mode == 'train':
             args = self.args
@@ -190,8 +233,7 @@ class PVRegressionDataset(Dataset):
             if self.use_h5:
                 buffer = self.image_log[index]
             else:
-                sample = self.dataset_samples[index]  # this refers to the path of the video
-                buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample), sample_rate_scale=scale_t)
+                buffer = self.load_clip(index, sample_rate_scale=scale_t)
             
 
             #sample = self.dataset_samples[index]
@@ -237,8 +279,7 @@ class PVRegressionDataset(Dataset):
             if self.use_h5:
                 buffer = self.image_log[index]
             else:
-                sample = self.dataset_samples[index]
-                buffer = self.load_video(os.path.join(self.data_path,"videos_trainval", sample))
+                buffer = self.load_clip(index)
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32
@@ -253,8 +294,7 @@ class PVRegressionDataset(Dataset):
             if self.use_h5:
                 buffer = self.image_log[index]
             else:
-                sample = self.dataset_samples[index]
-                buffer = self.load_video(os.path.join(self.data_path,"videos_test", sample))
+                buffer = self.load_clip(index)
             args = self.args
             buffer = self._aug_frame(buffer, args)
             # Convert to float32 and normalize by residual statistics
@@ -319,6 +359,69 @@ class PVRegressionDataset(Dataset):
             buffer = buffer.permute(1, 0, 2, 3)  # T C H W -> C T H W'''
 
         return buffer
+
+    def load_clip(self, index, sample_rate_scale=1):
+        sample = self.dataset_samples[index]
+        if self.lmdb_path:
+            video_key, start_idx = sample
+            return self.load_lmdb_clip(video_key, int(start_idx))
+        subdir = "videos_test" if self.mode == "test" else "videos_trainval"
+        return self.load_video(
+            os.path.join(self.data_path, subdir, sample),
+            sample_rate_scale=sample_rate_scale)
+
+    def _get_lmdb_env(self):
+        if self._lmdb_env is None:
+            self._lmdb_env = lmdb.open(
+                self.lmdb_path,
+                readonly=True,
+                lock=False,
+                readahead=False,
+                meminit=False,
+                max_readers=512,
+            )
+        return self._lmdb_env
+
+    def _get_day_frames(self, video_key):
+        cached = self._lmdb_cache.get(video_key)
+        if cached is not None:
+            self._lmdb_cache.move_to_end(video_key)
+            return cached
+        with self._get_lmdb_env().begin(write=False, buffers=True) as txn:
+            payload = txn.get(video_key.encode("utf-8"))
+            if payload is None:
+                raise KeyError(f"Missing LMDB key: {video_key}")
+            frames = pickle.loads(bytes(payload))
+        self._lmdb_cache[video_key] = frames
+        while len(self._lmdb_cache) > self._lmdb_cache_size:
+            self._lmdb_cache.popitem(last=False)
+        return frames
+
+    def load_lmdb_clip(self, video_key, start_idx):
+        encoded = self._get_day_frames(video_key)
+        clip = encoded[start_idx:start_idx + self.clip_len]
+        if len(clip) != self.clip_len:
+            raise RuntimeError(
+                f"{video_key}[{start_idx}:{start_idx + self.clip_len}] "
+                f"has {len(clip)} frames, expected {self.clip_len}")
+        frames = []
+        for buf in clip:
+            arr = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if arr is None:
+                raise RuntimeError(f"Failed to decode frame in {video_key}")
+            frames.append(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
+        return np.stack(frames, axis=0)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_lmdb_env"] = None
+        state["_lmdb_cache"] = OrderedDict()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._lmdb_env = None
+        self._lmdb_cache = OrderedDict()
 
     def load_video(self, sample, sample_rate_scale=1):
         
