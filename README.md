@@ -85,26 +85,45 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 ```
 
-# VideoMAEv2 Training
+# Training
 
 ## Finetuning
 
 ### CUDA
+Most of the experiments we ran used 2xA100. You can specify which DATA_PATH you want to use. This folder should contain folders named metadata_trainval, metadata_test, videos_trainval, and videos_test. The metadata folders should contain a parquet file with columns of mp4 file name, timestamp, pv log of shape 16, and pv pred, while the videos folders should contain enumerated mp4s. These folders can be generated using the preprocessing code. For finetuning on SKIPP'D, the command would look something like this:
+
 ```bash
-python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --warmup_lr=1e-3 --mixup=0 --cutmix=0 --data_path="/home/pherro/PVOutputPrediction/preprocessing/data/data_forecast4/"
+NUM_GPU=2
+DATA_PATH="/home/ubuntu/PVOutputPrediction/preprocessing/data/data_forecast4"
+OUTPUT_DIR="/home/ubuntu/PVOutputPrediction/models/VideoMAEv2/checkpoints_residual5"
+NUM_WORKERS=8
+torchrun --nproc_per_node=${NUM_GPU} run_class_finetuning.py --batch_size=48 --lr=5e-4 --num_workers={NUM_WORKERS} --mixup=0 --cutmix=0 --warmup_epochs=1 --layer_decay=0.9 --dist_eval --weight_decay=0.1 --data_path=${DATA_PATH} --device='cuda' --enable_deepspeed --output_dir=${OUTPUT_DIR} --save_ckpt --save_ckpt_freq=3 --use_residual --log_dir=${OUTPUT_DIR} --clip_grad=1.0
 ```
 
-### CPU (not recommended)
+For finetuning on Pangaea, since the dataset is larger, we use LMDB to store PNGs. The 16 consecutive frames can then be quickly accessed at train time, and don't have to be bundled together. This avoids an overlap and reduces the storage size by 8x. 
+
 ```bash
-python run_class_finetuning.py --batch_size=3 --lr=1e-3 --num_workers=0 --mixup=0 --cutmix=0 --device='cpu'
+cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
+./run_pangaea_lmdb_finetune.sh
 ```
 
-Replace data_path with whatever data_path you are using. This folder should contain folders named metadata_trainval, metadata_test, videos_trainval, and videos_test. The metadata folders should contain a parquet file with columns of mp4 file name, timestamp, pv log of shape 16, and pv pred, while the videos folders should contain enumerated mp4s.
+You can inspect PVOutputPrediction/models/VideoMAEv2/run_pangaea_lmdb_finetune.sh to see how to run it.
+
+### CPU (not recommended/not tested thoroughly)
+```bash
+DATA_PATH="/home/ubuntu/PVOutputPrediction/preprocessing/data/data_forecast4"
+OUTPUT_DIR="/home/ubuntu/PVOutputPrediction/models/VideoMAEv2/checkpoints_residual5"
+python run_class_finetuning.py --batch_size=48 --lr=5e-4 --mixup=0 --cutmix=0 --warmup_epochs=1 --layer_decay=0.9 --dist_eval --weight_decay=0.1 --data_path=${DATA_PATH} --device='cuda' --output_dir=${OUTPUT_DIR} --save_ckpt --save_ckpt_freq=3 --use_residual --log_dir="/home/ubuntu/PVOutputPrediction/models/VideoMAEv2/checkpoints_residual5" --clip_grad=1.0
+```
+
 
 ## Pretraining
 
-### Windows
-```bash
-python run_class_pretraining.py
-```
 ### Linux
+
+To run pretraining on the UoH (University of Hertsfordshire) dataset, using encoder weights from an already pretrained on Kinetics-400, run the following command. 
+
+```bash
+cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
+./run_uoh_pretrain_from_k400.sh
+```
