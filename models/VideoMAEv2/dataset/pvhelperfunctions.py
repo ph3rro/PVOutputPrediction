@@ -80,15 +80,13 @@ def cv_split_holdout(split_data, train_ratio=0.9):
     num_samples = len(split_data)
     indices = np.arange(num_samples)
 
-    # Shuffle ALL indices first with a fixed seed
-    np.random.seed(1)
-    np.random.shuffle(indices)
-
-    # Then split the shuffled list
     split_idx = int(train_ratio * num_samples)
     train_indices = indices[:split_idx]
     val_indices = indices[split_idx:]
 
+    np.random.seed(1)
+    np.random.shuffle(train_indices)
+    np.random.shuffle(val_indices)
     #data_train = split_data[train_indices]
     #data_val = split_data[val_indices]
 
