@@ -16,6 +16,19 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 import utils
 
 
+def masked_reconstruction_loss(outputs, labels, cal_loss_mask):
+    """Mean squared error over the reconstructed tokens selected by the mask.
+
+    ``cal_loss_mask`` is a [B, N_dec] bool/float tensor: 1 for tokens that
+    were hidden from the encoder and should be reconstructed, 0 for tokens
+    that are left out of the loss (e.g. sun-blocker tubelets).
+    """
+    loss = (outputs - labels)**2
+    loss = loss.mean(dim=-1)
+    # clamp guards against a batch in which every target is excluded.
+    return (loss * cal_loss_mask).sum() / cal_loss_mask.sum().clamp(min=1)
+
+
 def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable,
                     optimizer: torch.optim.Optimizer,
@@ -55,13 +68,23 @@ def train_one_epoch(model: torch.nn.Module,
         # NOTE: When the decoder mask ratio is 0,
         # in other words, when decoder masking is not used,
         # decode_masked_pos = ~bool_masked_pos
-        images, bool_masked_pos, decode_masked_pos = batch
+        # With --sun_blocker_masking the dataset yields a fourth tensor,
+        # loss_exclude_pos: tubelets to leave out of the reconstruction loss.
+        images, bool_masked_pos, decode_masked_pos = batch[:3]
+        loss_exclude_pos = batch[3] if len(batch) > 3 else None
 
         images = images.to(device, non_blocking=True)
         bool_masked_pos = bool_masked_pos.to(
             device, non_blocking=True).flatten(1).to(torch.bool)
         decode_masked_pos = decode_masked_pos.to(
             device, non_blocking=True).flatten(1).to(torch.bool)
+        # Tokens that count towards the loss: hidden from the encoder and
+        # not excluded.
+        loss_target_pos = bool_masked_pos
+        if loss_exclude_pos is not None:
+            loss_exclude_pos = loss_exclude_pos.to(
+                device, non_blocking=True).flatten(1).to(torch.bool)
+            loss_target_pos = bool_masked_pos & ~loss_exclude_pos
 
         with torch.no_grad():
             # calculate the predict label
@@ -96,21 +119,16 @@ def train_one_epoch(model: torch.nn.Module,
 
             B, N, C = images_patch.shape
             labels = images_patch[~decode_masked_pos].reshape(B, -1, C)
+            cal_loss_mask = loss_target_pos[~decode_masked_pos].reshape(B, -1)
 
         if loss_scaler is None:
             outputs = model(images, bool_masked_pos, decode_masked_pos)
-            loss = (outputs - labels)**2
-            loss = loss.mean(dim=-1)
-            cal_loss_mask = bool_masked_pos[~decode_masked_pos].reshape(B, -1)
-            loss = (loss * cal_loss_mask).sum() / cal_loss_mask.sum()
+            loss = masked_reconstruction_loss(outputs, labels, cal_loss_mask)
         else:
             with torch.cuda.amp.autocast():
                 outputs = model(images, bool_masked_pos, decode_masked_pos)
-                loss = (outputs - labels)**2
-                loss = loss.mean(dim=-1)
-                cal_loss_mask = bool_masked_pos[~decode_masked_pos].reshape(
-                    B, -1)
-                loss = (loss * cal_loss_mask).sum() / cal_loss_mask.sum()
+                loss = masked_reconstruction_loss(outputs, labels,
+                                                  cal_loss_mask)
 
         loss_value = loss.item()
 
@@ -139,12 +157,18 @@ def train_one_epoch(model: torch.nn.Module,
                 clip_grad=max_norm,
                 parameters=model.parameters(),
                 create_graph=is_second_order)
-            loss_scale_value = loss_scaler.state_dict()["scale"]
+            # A disabled GradScaler (CPU runs) has an empty state_dict.
+            loss_scale_value = loss_scaler.state_dict().get("scale", 0)
 
-        torch.cuda.synchronize()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
 
         metric_logger.update(loss=loss_value)
         metric_logger.update(loss_scale=loss_scale_value)
+        if loss_exclude_pos is not None:
+            # Fraction of all tubelets in the batch flagged as sun blocker.
+            sun_blocker_frac = loss_exclude_pos.float().mean().item()
+            metric_logger.update(sun_blocker_frac=sun_blocker_frac)
         min_lr = 10.
         max_lr = 0.
         for group in optimizer.param_groups:
@@ -162,6 +186,9 @@ def train_one_epoch(model: torch.nn.Module,
 
         if log_writer is not None:
             log_writer.update(loss=loss_value, head="loss")
+            if loss_exclude_pos is not None:
+                log_writer.update(sun_blocker_frac=sun_blocker_frac,
+                                  head="loss")
             log_writer.update(loss_scale=loss_scale_value, head="opt")
             log_writer.update(lr=max_lr, head="opt")
             log_writer.update(min_lr=min_lr, head="opt")

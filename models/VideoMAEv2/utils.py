@@ -626,17 +626,12 @@ def multiple_pretrain_samples_collate(batch, fold=False):
     Returns:
         (tuple): collated data batch.
     """
-    process_data, encoder_mask, decoder_mask = zip(*batch)
-
-    process_data = [item for sublist in process_data for item in sublist]
-    encoder_mask = [item for sublist in encoder_mask for item in sublist]
-    decoder_mask = [item for sublist in decoder_mask for item in sublist]
-    process_data, encoder_mask, decoder_mask = (
-        default_collate(process_data),
-        default_collate(encoder_mask),
-        default_collate(decoder_mask),
-    )
+    # Each item is (process_data_list, encoder_mask_list, decoder_mask_list)
+    # plus optional extra mask lists (e.g. the sun-blocker loss-exclude map).
+    fields = [
+        default_collate([item for sublist in field for item in sublist])
+        for field in zip(*batch)
+    ]
     if fold:
-        return [process_data], encoder_mask, decoder_mask
-    else:
-        return process_data, encoder_mask, decoder_mask
+        fields[0] = [fields[0]]
+    return tuple(fields)

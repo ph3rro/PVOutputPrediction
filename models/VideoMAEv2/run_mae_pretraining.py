@@ -96,6 +96,39 @@ def get_args():
         type=bool,
         help='normalized the target patch pixels')
 
+    # Sun-blocker masking (UoH data, LMDB only). See dataset/sun_blocker.py.
+    parser.add_argument(
+        '--sun_blocker_masking',
+        action='store_true',
+        default=False,
+        help=(
+            'Detect the dark UoH sun blocker (disc and arm) in clips dated '
+            'on or before --sun_blocker_until. Tubelets containing it are '
+            'always masked from the encoder and left out of the '
+            'reconstruction loss. Requires --lmdb_path; clip dates come '
+            'from the LMDB video stems.'))
+    parser.add_argument(
+        '--sun_blocker_until',
+        default='2020-07-01',
+        type=str,
+        help=(
+            'Last date (YYYY-MM-DD, inclusive) on which the sun blocker is '
+            'present in the UoH data.'))
+    parser.add_argument(
+        '--sun_blocker_threshold',
+        default=60,
+        type=float,
+        help=(
+            'Gray level in [0, 255]; augmented pixels below it count as '
+            'sun-blocker pixels.'))
+    parser.add_argument(
+        '--sun_blocker_min_pixels',
+        default=1,
+        type=int,
+        help=(
+            'A tubelet is masked when it contains at least this many '
+            'sun-blocker pixels.'))
+
     # Optimizer parameters
     parser.add_argument(
         '--opt',

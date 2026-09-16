@@ -11,11 +11,16 @@ from .datasets import RawFrameClsDataset, VideoClsDataset, PVRegressionDataset
 from .pretrain_datasets import (  # noqa: F401
     DataAugmentationForVideoMAEv2, HybridVideoMAE, LMDBVideoMAE, VideoMAE,
 )
+from .sun_blocker import parse_date
 
 
 def build_pretraining_dataset(args):
+    sun_blocker_masking = getattr(args, 'sun_blocker_masking', False)
     transform = DataAugmentationForVideoMAEv2(args)
     if args.lmdb_path:
+        sun_blocker_until = (
+            parse_date(args.sun_blocker_until)
+            if sun_blocker_masking else None)
         dataset = LMDBVideoMAE(
             lmdb_path=args.lmdb_path,
             new_length=args.num_frames,
@@ -24,8 +29,13 @@ def build_pretraining_dataset(args):
             temporal_jitter=False,
             num_sample=args.num_sample,
             key_limit=args.dataset_limit,
-            clip_stride_minutes=args.clip_stride_minutes)
+            clip_stride_minutes=args.clip_stride_minutes,
+            sun_blocker_until=sun_blocker_until)
     else:
+        if sun_blocker_masking:
+            raise ValueError(
+                '--sun_blocker_masking needs --lmdb_path: clip dates are '
+                'read from the LMDB video stems (e.g. camera7_2019-06-20).')
         dataset = HybridVideoMAE(
             root=args.data_root,
             setting=args.data_path,

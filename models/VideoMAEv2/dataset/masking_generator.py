@@ -67,12 +67,43 @@ class TubeMaskingGenerator:
             self.total_patches, self.total_masks)
         return repr_str
 
-    def __call__(self):
-        mask_per_frame = np.hstack([
-            np.zeros(self.num_patches_per_frame - self.num_masks_per_frame),
-            np.ones(self.num_masks_per_frame),
-        ])
-        np.random.shuffle(mask_per_frame)
+    def __call__(self, forced_mask=None):
+        """Sample a tube mask.
+
+        Args:
+            forced_mask: optional bool array of ``num_patches_per_frame``
+                spatial positions that must be masked (e.g. sun-blocker
+                patches). The remaining masked positions are drawn at random
+                from the other patches so the number of visible tokens stays
+                fixed. If more positions are forced than the mask ratio
+                allows, a random subset of them is masked.
+        """
+        if forced_mask is None:
+            mask_per_frame = np.hstack([
+                np.zeros(self.num_patches_per_frame -
+                         self.num_masks_per_frame),
+                np.ones(self.num_masks_per_frame),
+            ])
+            np.random.shuffle(mask_per_frame)
+        else:
+            forced_mask = np.asarray(forced_mask, dtype=bool).reshape(-1)
+            if forced_mask.shape[0] != self.num_patches_per_frame:
+                raise ValueError(
+                    f"forced_mask has {forced_mask.shape[0]} entries, "
+                    f"expected {self.num_patches_per_frame}")
+            forced_idx = np.flatnonzero(forced_mask)
+            if forced_idx.size >= self.num_masks_per_frame:
+                chosen = np.random.choice(
+                    forced_idx, self.num_masks_per_frame, replace=False)
+            else:
+                free_idx = np.flatnonzero(~forced_mask)
+                extra = np.random.choice(
+                    free_idx,
+                    self.num_masks_per_frame - forced_idx.size,
+                    replace=False)
+                chosen = np.concatenate([forced_idx, extra])
+            mask_per_frame = np.zeros(self.num_patches_per_frame)
+            mask_per_frame[chosen] = 1
         mask = np.tile(mask_per_frame, (self.frames, 1))
         return mask  # [196*8]
 

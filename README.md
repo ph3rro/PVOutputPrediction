@@ -127,3 +127,21 @@ To run pretraining on the UoH (University of Hertsfordshire) dataset, using enco
 cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
 ./run_uoh_pretrain_from_k400.sh
 ```
+
+### Sun-blocker masking (UoH)
+
+Until 2020-07-01 the UoH camera carried a sun blocker (a black disc on a thin black arm). Add `--sun_blocker_masking` to the pretraining command to keep the model from learning to reconstruct it. For every clip whose LMDB video stem is dated on or before `--sun_blocker_until` (default `2020-07-01`), the augmented frames are thresholded at `--sun_blocker_threshold` (default 60 on a 0-255 gray scale) and every tubelet (2 frames x 16 x 16 pixels) with at least `--sun_blocker_min_pixels` (default 1) dark pixels is
+
+- always placed in the encoder mask (the random tube mask is drawn around it, so the number of visible tokens is unchanged), and
+- excluded from the decoder's reconstruction loss.
+
+Note that any other near-black pixels in those clips (the black padding above and below the frame, the corners outside the fisheye disc, the tree line) are masked the same way; clips after the cutoff are untouched. The flag needs `--lmdb_path`, since the clip date is read from the video stem (`camera7_2019-06-20`). Training logs and TensorBoard gain a `sun_blocker_frac` value, the fraction of tubelets excluded per batch. The extra work is a threshold and a per-tubelet count in the DataLoader workers, a few milliseconds per clip, and the GPU step is unchanged.
+
+To check the threshold on your data before training, render a few clips:
+
+```bash
+cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
+python visualize_sun_blocker_mask.py --lmdb_path /home/ubuntu/PVOutputPrediction/preprocessing/data/uoh_lmdb_minute_224/frames.lmdb --clip_stride_minutes 2 --stem_contains 2018-03-16 --num_clips 4 --out_dir sun_blocker_vis
+```
+
+Each PNG shows the augmented frame, the dark pixels in red, the excluded tubelets in magenta, and the encoder input with hidden patches blacked out.

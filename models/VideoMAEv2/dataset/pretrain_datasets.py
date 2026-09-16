@@ -14,6 +14,11 @@ from .masking_generator import (
     RunningCellMaskingGenerator,
     TubeMaskingGenerator,
 )
+from .sun_blocker import (
+    SunBlockerDetector,
+    clip_has_sun_blocker,
+    date_from_stem,
+)
 from .transforms import (
     GroupMultiScaleCrop,
     GroupNormalize,
@@ -51,15 +56,56 @@ class DataAugmentationForVideoMAEv2(object):
             else:
                 raise NotImplementedError(
                     'Unsupported decoder masking strategy type.')
+        # Optional sun-blocker masking (see dataset/sun_blocker.py). When it
+        # is enabled, __call__ returns a fourth item: a bool map of tubelets
+        # to exclude from the reconstruction loss.
+        self.sun_blocker_detector = None
+        if getattr(args, 'sun_blocker_masking', False):
+            self.sun_blocker_detector = SunBlockerDetector(
+                num_frames=args.num_frames,
+                tubelet_size=args.tubelet_size,
+                patch_size=args.patch_size,
+                threshold=args.sun_blocker_threshold,
+                min_pixels=args.sun_blocker_min_pixels,
+                mean=self.input_mean,
+                std=self.input_std)
 
-    def __call__(self, images):
+    def __call__(self, images, sun_blocker=False):
+        """Augment a clip and sample its masks.
+
+        Args:
+            images: ``(list_of_PIL_frames, label)``.
+            sun_blocker: run the sun-blocker detector on this clip. Only
+                meaningful when the detector is enabled.
+        Returns:
+            ``(process_data, encoder_mask, decoder_mask)`` and, when the
+            detector is enabled, a fourth ``loss_exclude`` bool map with the
+            same layout as the encoder mask ([frames // tubelet_size,
+            patches per frame]).
+        """
         process_data, _ = self.transform(images)
-        encoder_mask_map = self.encoder_mask_map_generator()
+        sun_blocker_map = None
+        if self.sun_blocker_detector is not None and sun_blocker:
+            tubelet_mask = self.sun_blocker_detector(process_data)
+            sun_blocker_map = tubelet_mask.reshape(
+                tubelet_mask.shape[0], -1).numpy()
+        if sun_blocker_map is None:
+            encoder_mask_map = self.encoder_mask_map_generator()
+        else:
+            # Tube masking keeps one spatial pattern for the whole clip, so
+            # any patch the blocker touches at any time is hidden throughout.
+            encoder_mask_map = self.encoder_mask_map_generator(
+                forced_mask=sun_blocker_map.any(axis=0))
         if hasattr(self, 'decoder_mask_map_generator'):
             decoder_mask_map = self.decoder_mask_map_generator()
         else:
             decoder_mask_map = 1 - encoder_mask_map
-        return process_data, encoder_mask_map, decoder_mask_map
+        if self.sun_blocker_detector is None:
+            return process_data, encoder_mask_map, decoder_mask_map
+        if sun_blocker_map is None:
+            sun_blocker_map = np.zeros(encoder_mask_map.shape, dtype=bool)
+        return (process_data, encoder_mask_map, decoder_mask_map,
+                sun_blocker_map)
 
     def __repr__(self):
         repr = "(DataAugmentationForVideoMAEv2,\n"
@@ -71,6 +117,9 @@ class DataAugmentationForVideoMAEv2(object):
                 self.decoder_mask_map_generator)
         else:
             repr += "  Do not use decoder masking,\n"
+        if self.sun_blocker_detector is not None:
+            repr += "  Sun-blocker masking = %s,\n" % str(
+                self.sun_blocker_detector)
         repr += ")"
         return repr
 
@@ -559,6 +608,12 @@ class LMDBVideoMAE(VideoMAE):
     pickled list of encoded image bytes, as written by build_uoh_lmdb.py.
     LMDB environments are opened lazily in each DataLoader worker because an
     environment must not be shared across forked processes.
+
+    When ``sun_blocker_until`` (a ``datetime.date``) is given, clips whose
+    video stem is dated on or before it are flagged and the transform is
+    called with ``sun_blocker=True`` for them, so it can mask the UoH sun
+    blocker (see dataset/sun_blocker.py). Videos without a parseable
+    ``YYYY-MM-DD`` in their stem are never flagged.
     """
 
     def __init__(self,
@@ -569,7 +624,8 @@ class LMDBVideoMAE(VideoMAE):
                  temporal_jitter=False,
                  num_sample=1,
                  key_limit=None,
-                 clip_stride_minutes=None):
+                 clip_stride_minutes=None,
+                 sun_blocker_until=None):
         super().__init__(
             root='',
             setting='',
@@ -651,6 +707,28 @@ class LMDBVideoMAE(VideoMAE):
 
         if not self.clips:
             raise RuntimeError(f"No video entries found in {self.lmdb_path}")
+
+        self.sun_blocker_until = sun_blocker_until
+        self.clip_sun_blocker = None
+        if sun_blocker_until is not None:
+            key_flags = {
+                key: clip_has_sun_blocker(
+                    key.decode('utf-8'), sun_blocker_until)
+                for key in keys
+            }
+            self.clip_sun_blocker = np.fromiter(
+                (key_flags[clip[0] if isinstance(clip, tuple) else clip]
+                 for clip in self.clips),
+                dtype=bool,
+                count=len(self.clips))
+            n_undated = sum(
+                date_from_stem(key.decode('utf-8')) is None for key in keys)
+            print(
+                f"Sun-blocker masking: {int(self.clip_sun_blocker.sum())} of "
+                f"{len(self.clips)} clips are dated on or before "
+                f"{sun_blocker_until} and will be masked"
+                + (f" ({n_undated} videos have no parseable date and are "
+                   "never masked)" if n_undated else ""))
 
         self._env = None
         if clip_stride_minutes is None:
@@ -743,25 +821,31 @@ class LMDBVideoMAE(VideoMAE):
         else:
             raise RuntimeError("Failed to load 10 LMDB videos in a row")
 
-        if self.num_sample > 1:
-            process_data_list = []
-            encoder_mask_list = []
-            decoder_mask_list = []
-            for _ in range(self.num_sample):
-                process_data, encoder_mask, decoder_mask = self.transform(
-                    (images, None))
-                process_data = process_data.view(
-                    (self.new_length, 3) +
-                    process_data.size()[-2:]).transpose(0, 1)
-                process_data_list.append(process_data)
-                encoder_mask_list.append(encoder_mask)
-                decoder_mask_list.append(decoder_mask)
-            return (process_data_list, encoder_mask_list,
-                    decoder_mask_list)
+        # `index` may have been redrawn above, so look the flag up here.
+        sun_blocker = (
+            bool(self.clip_sun_blocker[index])
+            if self.clip_sun_blocker is not None else False)
 
-        process_data, encoder_mask, decoder_mask = self.transform(
-            (images, None))
+        if self.num_sample > 1:
+            samples = [
+                self._transform_clip(images, sun_blocker)
+                for _ in range(self.num_sample)
+            ]
+            # One list per field: (process_data_list, encoder_mask_list,
+            # decoder_mask_list[, loss_exclude_list]).
+            return tuple(list(field) for field in zip(*samples))
+
+        return self._transform_clip(images, sun_blocker)
+
+    def _transform_clip(self, images, sun_blocker):
+        """Augment one clip; returns (process_data, *masks)."""
+        if self.clip_sun_blocker is None:
+            outputs = self.transform((images, None))
+        else:
+            outputs = self.transform((images, None), sun_blocker=sun_blocker)
+        process_data = outputs[0]
+        # T*C,H,W -> T,C,H,W -> C,T,H,W
         process_data = process_data.view(
             (self.new_length, 3) +
             process_data.size()[-2:]).transpose(0, 1)
-        return process_data, encoder_mask, decoder_mask
+        return (process_data,) + tuple(outputs[1:])
