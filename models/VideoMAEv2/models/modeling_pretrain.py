@@ -66,7 +66,7 @@ class PretrainVisionTransformerEncoder(nn.Module):
 
         if use_learnable_pos_emb:
             self.pos_embed = nn.Parameter(
-                torch.zeros(1, num_patches + 1, embed_dim))
+                torch.zeros(1, num_patches, embed_dim))
         else:
             # sine-cosine positional embeddings
             self.pos_embed = get_sinusoid_encoding_table(
@@ -124,7 +124,10 @@ class PretrainVisionTransformerEncoder(nn.Module):
     def forward_features(self, x, mask):
         x = self.patch_embed(x)
 
-        x = x + self.pos_embed.type_as(x).to(x.device).clone().detach()
+        # No detach: the sine-cosine table is already requires_grad=False, so
+        # this only matters when use_learnable_pos_emb makes pos_embed a
+        # Parameter that has to receive gradients.
+        x = x + self.pos_embed.type_as(x).to(x.device)
 
         B, _, C = x.shape
         x_vis = x[~mask].reshape(B, -1, C)  # ~mask means visible

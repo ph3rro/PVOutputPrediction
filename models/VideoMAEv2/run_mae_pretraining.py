@@ -47,6 +47,13 @@ def get_args():
         help='Name of model to train')
     parser.add_argument('--tubelet_size', type=int, default=2)
     parser.add_argument(
+        '--use_learnable_pos_emb',
+        action='store_true',
+        default=False,
+        help='Use a trainable encoder position embedding instead of the '
+        'fixed sine-cosine table. Matches the finetune model, but the '
+        'resulting checkpoint then carries a pos_embed key.')
+    parser.add_argument(
         '--with_checkpoint', action='store_true', default=False)
     parser.add_argument(
         '--disable_compile',
@@ -285,6 +292,7 @@ def get_model(args):
         all_frames=args.num_frames,
         tubelet_size=args.tubelet_size,
         decoder_depth=args.decoder_depth,
+        use_learnable_pos_emb=args.use_learnable_pos_emb,
         with_cp=args.with_checkpoint)
 
     if (not args.disable_compile and
@@ -366,7 +374,28 @@ def main(args):
         if checkpoint_model is None:
             checkpoint_model = checkpoint
 
-        utils.load_state_dict(model, checkpoint_model)
+        # torch.compile wraps the model in an OptimizedModule whose state_dict
+        # keys are prefixed with '_orig_mod.'. Load into the underlying module
+        # so names line up, and strip the same prefix from checkpoints that
+        # were themselves saved from a compiled model.
+        target = getattr(model, '_orig_mod', model)
+        checkpoint_model = {
+            (k[len('_orig_mod.'):] if k.startswith('_orig_mod.') else k): v
+            for k, v in checkpoint_model.items()
+        }
+        target_keys = target.state_dict().keys()
+        n_match = sum(1 for k in checkpoint_model if k in target_keys)
+        if n_match == 0:
+            raise RuntimeError(
+                "--finetune checkpoint shares no parameter names with the "
+                f"model (sample checkpoint key: "
+                f"{next(iter(checkpoint_model))!r}). Refusing to silently "
+                "train from random init. For MAE pretraining this must be an "
+                "encoder+decoder checkpoint with 'encoder.*' keys, not a "
+                "classification/finetune checkpoint.")
+        print(f"--finetune: {n_match}/{len(target_keys)} model tensors "
+              "matched by name")
+        utils.load_state_dict(target, checkpoint_model)
 
     model.to(device)
     model_without_ddp = model
