@@ -38,7 +38,7 @@ def day_block_shuffle(times_trainval):
         blocks.append(np.where(dates_trainval == unique_dates[i])[0])
 
     # shuffle the blocks, and chain it back together
-    np.random.seed(1)
+    np.random.seed(79)
     np.random.shuffle(blocks)
     shuffled_indices = np.asarray(list(itertools.chain.from_iterable(blocks)))
 
@@ -75,10 +75,9 @@ def cv_split_kfold(split_data, fold_index, num_fold):
 
     return data_train,data_val
 
-def cv_split_holdout(split_data, train_ratio=0.9):
-    split_data = np.asarray(split_data)
-    num_samples = len(split_data)
-    indices = np.arange(num_samples)
+def cv_split_holdout(indices, train_ratio=0.9):
+    indices = np.asarray(indices)
+    num_samples = len(indices)
 
     split_idx = int(train_ratio * num_samples)
     train_indices = indices[:split_idx]

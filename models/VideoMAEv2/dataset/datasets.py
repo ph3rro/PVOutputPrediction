@@ -141,6 +141,7 @@ class PVRegressionDataset(Dataset):
 
         pv_log_train, pv_log_val = pv_log_trainval[train_indices], pv_log_trainval[val_indices]
         pv_pred_train, pv_pred_val = pv_pred_trainval[train_indices], pv_pred_trainval[val_indices]
+        times_train = np.asarray(times_trainval, dtype=object)[train_indices]
         if not use_h5:
             cloudiness_train = cloudiness_trainval[train_indices]
 
@@ -163,6 +164,7 @@ class PVRegressionDataset(Dataset):
             dataset_samples_train = dataset_samples_train[mask]
             pv_log_train = pv_log_train[mask]
             pv_pred_train = pv_pred_train[mask]
+            times_train = times_train[mask]
             print(f"Cloudiness filter: keeping {mask.sum()} / {len(mask)} training samples with cloudiness > {args.cloudiness_threshold}")
 
         # temporary testing
@@ -177,6 +179,12 @@ class PVRegressionDataset(Dataset):
                 self.dataset_samples = dataset_samples_train
             self.pv_log = pv_log_train      
             self.pv_pred = pv_pred_train
+            # Chronological index of each clip within its day, used by
+            # DayStrideSampler to pick evenly spaced subsets per epoch.
+            times = pd.Series(pd.to_datetime(times_train))
+            self.clip_day_position = (
+                times.groupby(times.dt.date).rank(method='first')
+                .to_numpy(dtype=np.int64) - 1)
 
         elif (mode == 'validation'):
             
@@ -226,7 +234,18 @@ class PVRegressionDataset(Dataset):
         self.pv_log = self.pv_log[order]
         self.pv_pred = self.pv_pred[order]
 
+    def _pv_only_item(self, index):
+        # The PV-only model never reads the video, so skip decoding it and
+        # return a one-element placeholder in its place.
+        pv_log = torch.tensor(self.pv_log[index], dtype=torch.float32)
+        pv_pred = torch.tensor(self.pv_pred[index], dtype=torch.float32)
+        if self.mode == 'train':
+            return torch.zeros(1), pv_log, pv_pred, index
+        return torch.zeros(1), pv_log, pv_pred, index, {}
+
     def __getitem__(self, index):
+        if getattr(self.args, 'pv_only', False):
+            return self._pv_only_item(index)
         if self.mode == 'train':
             args = self.args
             scale_t = 1
@@ -321,6 +340,9 @@ class PVRegressionDataset(Dataset):
         #buffer = buffer.permute(0, 2, 3, 1)  # T H W C
         buffer = torch.from_numpy(buffer)
         buffer = buffer.float() / 255.0
+        jitter = getattr(args, 'color_jitter', 0.0)
+        if self.mode == 'train' and jitter > 0:
+            buffer = brightness_contrast_jitter(buffer, jitter)
 
         # T H W C
         buffer = tensor_normalize(buffer, [0.485, 0.456, 0.406],
@@ -366,9 +388,12 @@ class PVRegressionDataset(Dataset):
             video_key, start_idx = sample
             return self.load_lmdb_clip(video_key, int(start_idx))
         subdir = "videos_test" if self.mode == "test" else "videos_trainval"
-        return self.load_video(
+        buffer = self.load_video(
             os.path.join(self.data_path, subdir, sample),
             sample_rate_scale=sample_rate_scale)
+        if getattr(self.args, 'swap_rb', False) and len(buffer):
+            buffer = np.ascontiguousarray(buffer[..., ::-1])
+        return buffer
 
     def _get_lmdb_env(self):
         if self._lmdb_env is None:
@@ -1177,3 +1202,17 @@ def tensor_normalize(tensor, mean, std):
     tensor = tensor - mean
     tensor = tensor / std
     return tensor
+
+
+def brightness_contrast_jitter(clip, strength):
+    """
+    Scale brightness and contrast by random factors in [1 - strength, 1 + strength].
+    One pair of factors is drawn per clip so frame-to-frame changes are preserved.
+    Args:
+        clip (tensor): frames in [0, 1], any shape.
+        strength (float): maximum relative change.
+    """
+    brightness, contrast = (1.0 + (torch.rand(2) * 2 - 1) * strength).tolist()
+    mean = clip.mean()
+    clip = (clip - mean) * contrast + mean
+    return (clip * brightness).clamp_(0.0, 1.0)

@@ -62,6 +62,9 @@ def get_args():
         add_help=False)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--stop_epoch', default=None, type=int,
+                        help='end training after this many epochs while keeping '
+                        'the LR/WD schedule of --epochs')
     parser.add_argument('--update_freq', default=1, type=int)
     parser.add_argument('--save_ckpt_freq', default=100, type=int)
 
@@ -211,11 +214,17 @@ def get_args():
     parser.add_argument(
         '--color_jitter',
         type=float,
-        default=0.4,
+        default=0.0,
         metavar='PCT',
-        help='Color jitter factor (default: 0.4)')
+        help='Train-only brightness/contrast jitter, e.g. 0.15 for +/-15%% (default: 0, off)')
     parser.add_argument(
         '--num_sample', type=int, default=1, help='Repeated_aug (default: 2)') # number of data augmentations (including the original), we'll start at 1 for now
+    parser.add_argument(
+        '--train_subsample',
+        type=int,
+        default=1,
+        help='Train on a different 1/N of the clips each epoch, evenly '
+        'spaced within each day (default: 1, all clips every epoch)')
     parser.add_argument(
         '--aa',
         type=str,
@@ -311,6 +320,15 @@ def get_args():
     parser.add_argument('--model_prefix', default='', type=str)
     parser.add_argument('--init_scale', default=0.001, type=float)
     parser.add_argument('--use_mean_pooling', action='store_true')
+    parser.add_argument('--swap_rb', action='store_true',
+                        help='reverse the channel order of MP4 clips; the SKIPPD '
+                        'videos were written with red and blue swapped')
+    parser.add_argument('--pos_emb', default='learnable',
+                        choices=['learnable', 'fixed_sincos', 'learnable_sincos'],
+                        help='learnable: random init; fixed_sincos: the fixed MAE '
+                        'pretraining table; learnable_sincos: learnable, initialized '
+                        'from that table. fixed_sincos is not stored in checkpoints, '
+                        'so evaluation must pass the same --pos_emb')
     parser.set_defaults(use_mean_pooling=True)
     parser.add_argument(
         '--use_cls', action='store_false', dest='use_mean_pooling')
@@ -416,6 +434,10 @@ def get_args():
     parser.add_argument(
         '--test_and_save_outputs', action='store_true', help='Test and save outputs')
     parser.add_argument(
+        '--predictions_name',
+        default='predictions_uoh_pretrained.npy',
+        help='File name for --test_and_save_outputs predictions, saved in --data_path')
+    parser.add_argument(
         '--validation', action='store_true', help='Perform validation only')
     parser.add_argument(
         '--dist_eval',
@@ -457,6 +479,18 @@ def get_args():
         ds_init = None
 
     return parser.parse_args(), ds_init
+
+
+def build_train_sampler(dataset_train, args, num_tasks, global_rank):
+    if args.train_subsample > 1:
+        return utils.DayStrideSampler(
+            dataset_train.clip_day_position,
+            args.train_subsample,
+            num_replicas=num_tasks,
+            rank=global_rank,
+            seed=args.seed)
+    return torch.utils.data.DistributedSampler(
+        dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True)
 
 
 def main(args, ds_init):
@@ -503,8 +537,7 @@ def main(args, ds_init):
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
-    sampler_train = torch.utils.data.DistributedSampler(
-        dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True)
+    sampler_train = build_train_sampler(dataset_train, args, num_tasks, global_rank)
     print("Sampler_train = %s" % str(sampler_train))
     if args.dist_eval:
         if len(dataset_val) % num_tasks != 0:
@@ -602,7 +635,9 @@ def main(args, ds_init):
         with_cp=args.with_checkpoint,
         model_task = args.model_task,
         pv_only=args.pv_only,
-        video_only=args.video_only
+        video_only=args.video_only,
+        use_learnable_pos_emb=args.pos_emb != 'fixed_sincos',
+        sincos_pos_init=args.pos_emb == 'learnable_sincos'
     )
 
     summary(model)
@@ -773,7 +808,7 @@ def main(args, ds_init):
     print('number of params:', n_parameters)
 
     total_batch_size = args.batch_size * args.update_freq * num_tasks
-    num_training_steps_per_epoch = len(dataset_train) // total_batch_size
+    num_training_steps_per_epoch = len(dataset_train) // args.train_subsample // total_batch_size
     args.lr = args.lr if total_batch_size==2 else args.lr * total_batch_size / 256
     #########scale the lr#############
     args.min_lr = args.min_lr * total_batch_size / 256
@@ -895,7 +930,7 @@ def main(args, ds_init):
         )
         exit(0)
     if args.test_and_save_outputs:
-        test_stats = test_and_save_outputs(data_loader_test, model, device, args.data_path, args.use_residual, pv_log_mean, pv_log_std, residual_mean, residual_std)
+        test_stats = test_and_save_outputs(data_loader_test, model, device, args.data_path, args.use_residual, pv_log_mean, pv_log_std, residual_mean, residual_std, filename=args.predictions_name)
         exit(0)
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
@@ -933,7 +968,8 @@ def main(args, ds_init):
     # Monotonic tensorboard step counter, kept independent of phase resets.
     tb_step = args.start_epoch * num_training_steps_per_epoch * args.update_freq
     phase_switched = False
-    for epoch in range(args.start_epoch, args.epochs):
+    end_epoch = args.epochs if args.stop_epoch is None else min(args.stop_epoch, args.epochs)
+    for epoch in range(args.start_epoch, end_epoch):
         rebuild_dataset = (
             args.cloudiness_threshold_after is not None
             and args.cloudiness_threshold_after != args.cloudiness_threshold
@@ -959,11 +995,8 @@ def main(args, ds_init):
                 # untouched.
                 dataset_train, _ = build_dataset(
                     is_train=True, test_mode=False, args=args)
-                sampler_train = torch.utils.data.DistributedSampler(
-                    dataset_train,
-                    num_replicas=num_tasks,
-                    rank=global_rank,
-                    shuffle=True)
+                sampler_train = build_train_sampler(
+                    dataset_train, args, num_tasks, global_rank)
                 data_loader_train = torch.utils.data.DataLoader(
                     dataset_train,
                     sampler=sampler_train,
@@ -975,7 +1008,7 @@ def main(args, ds_init):
                     persistent_workers=True)
 
                 old_num_training_steps_per_epoch = num_training_steps_per_epoch
-                num_training_steps_per_epoch = len(dataset_train) // total_batch_size
+                num_training_steps_per_epoch = len(dataset_train) // args.train_subsample // total_batch_size
                 print(
                     f"Rebuilt train dataset: {len(dataset_train)} samples, "
                     f"{num_training_steps_per_epoch} steps per epoch "
@@ -1024,8 +1057,7 @@ def main(args, ds_init):
             phase_start_epoch = epoch
             phase_switched = True
 
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
+        data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
             log_writer.set_step(tb_step)
         train_stats = train_one_epoch(

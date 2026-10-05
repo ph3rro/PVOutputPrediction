@@ -214,6 +214,46 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
+class DayStrideSampler(torch.utils.data.Sampler):
+    """Yield one of `stride` interleaved subsets of the clips per epoch.
+
+    Clip i belongs to subset day_position[i] % stride, so each subset spans
+    every day evenly. Each block of `stride` consecutive epochs visits every
+    subset once, in random order. The order depends only on seed and epoch, so
+    all ranks agree on it; each rank then takes every num_replicas-th sample.
+    """
+
+    def __init__(self, day_position, stride, num_replicas=1, rank=0, seed=0):
+        day_position = np.asarray(day_position)
+        self.groups = [
+            np.flatnonzero(day_position % stride == g) for g in range(stride)
+        ]
+        self.stride = stride
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.seed = seed
+        self.epoch = 0
+        self.num_samples = len(day_position) // stride // num_replicas
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
+    def __len__(self):
+        return self.num_samples
+
+    def __iter__(self):
+        cycle, pos = divmod(self.epoch, self.stride)
+        group_order = np.random.default_rng([self.seed, cycle]).permutation(
+            self.stride)
+        group = self.groups[group_order[pos]]
+        order = np.random.default_rng([self.seed, cycle, pos]).permutation(group)
+        total = self.num_samples * self.num_replicas
+        # Subsets differ in size by up to one clip per day; wrap or truncate so
+        # every epoch has the same length as the LR schedule assumes.
+        order = np.resize(order, total)
+        return iter(order[self.rank:total:self.num_replicas].tolist())
+
+
 def _load_checkpoint_for_ema(model_ema, checkpoint):
     """
     Workaround for ModelEma._load_checkpoint to accept an already-loaded object

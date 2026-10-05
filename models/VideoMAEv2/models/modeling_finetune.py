@@ -385,7 +385,8 @@ class VisionTransformer(nn.Module):
                  with_cp=False,
                  cos_attn=False,
                  pv_only=False,
-                 video_only=False):
+                 video_only=False,
+                 sincos_pos_init=False):
         super().__init__()
         if pv_only and video_only:
             raise ValueError("pv_only and video_only are mutually exclusive")
@@ -409,7 +410,14 @@ class VisionTransformer(nn.Module):
         num_patches = self.patch_embed.num_patches
         self.with_cp = with_cp
 
-        if use_learnable_pos_emb:
+        if use_learnable_pos_emb and sincos_pos_init:
+            # Start from the fixed table used in MAE pretraining.
+            self.pos_embed = nn.Parameter(
+                get_sinusoid_encoding_table(num_patches, embed_dim).clone())
+            self.pv_pos_embed = nn.Parameter(
+                get_sinusoid_encoding_table(
+                    all_frames//tubelet_size, embed_dim).clone())
+        elif use_learnable_pos_emb:
             self.pos_embed = nn.Parameter(
                 torch.zeros(1, num_patches, embed_dim))
             self.pv_pos_embed = nn.Parameter(
@@ -452,7 +460,7 @@ class VisionTransformer(nn.Module):
         else:
             raise ValueError(f"Invalid model task: {model_task}")
 
-        if use_learnable_pos_emb:
+        if use_learnable_pos_emb and not sincos_pos_init:
             trunc_normal_(self.pos_embed, std=.02)
             trunc_normal_(self.pv_pos_embed, std=.02)
 

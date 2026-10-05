@@ -280,7 +280,8 @@ def validation_one_epoch(data_loader, model, device, use_residual=False,
 
 @torch.no_grad()
 def test_and_save_outputs(data_loader, model, device, data_path, use_residual=False,
-                           pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0):
+                           pv_log_mean=0.0, pv_log_std=1.0, residual_mean=0.0, residual_std=1.0,
+                           filename='predictions_uoh_pretrained.npy'):
     if unwrap_model(model).model_task == 'regression':
         criterion = torch.nn.MSELoss()
     else:
@@ -327,7 +328,7 @@ def test_and_save_outputs(data_loader, model, device, data_path, use_residual=Fa
 
     if outputs:
         outputs = torch.cat(outputs, dim=0)
-        np.save(os.path.join(data_path, 'predictions_uoh_pretrained.npy'), outputs.numpy())
+        np.save(os.path.join(data_path, filename), outputs.numpy())
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
