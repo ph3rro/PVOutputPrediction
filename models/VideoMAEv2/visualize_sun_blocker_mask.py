@@ -1,18 +1,22 @@
 #!/usr/bin/env python
 """Visualise what --sun_blocker_masking would mask on real LMDB clips.
 
-Runs the exact training augmentation and sun-blocker detector on a few clips
-and writes one PNG per clip to --out_dir. Each PNG has one row per shown frame
-and four panels per row:
+Runs the training augmentation and sun-blocker detector on a few clips and
+writes one PNG per clip to --out_dir. The random crop is switched off, so the
+frames are drawn as stored, which is what the detector sees and where the sky
+circle is defined. Each PNG has one row per shown frame and four panels:
 
-  1. augmented frame as the model sees it
-  2. dark pixels (below --sun_blocker_threshold) tinted red
+  1. the stored frame
+  2. blocker pixels (at least --sun_blocker_contrast darker than the sky
+     around them) in red; pixels that pass that test but lie outside the sky
+     region, and are ignored, in blue; the edge of the sky region
+     (--sun_blocker_circle, --sun_blocker_image_rows) in yellow
   3. tubelets flagged as sun blocker (excluded from the loss) shaded magenta
   4. encoder input: patches hidden from the encoder are blacked out; every
      flagged patch is always among them
 
-Use it to tune --sun_blocker_threshold / --sun_blocker_min_pixels before a
-pretraining run, e.g.
+Use it to tune --sun_blocker_contrast / --sun_blocker_kernel /
+--sun_blocker_min_pixels and the sky region before a pretraining run, e.g.
 
   python visualize_sun_blocker_mask.py \\
       --lmdb_path /data/uoh_lmdb_minute_224/frames.lmdb \\
@@ -28,7 +32,12 @@ import torch
 from PIL import Image
 
 from dataset.pretrain_datasets import DataAugmentationForVideoMAEv2, LMDBVideoMAE
-from dataset.sun_blocker import date_from_stem, parse_date
+from dataset.sun_blocker import (
+    UOH_IMAGE_ROWS,
+    UOH_SKY_CIRCLE,
+    date_from_stem,
+    parse_date,
+)
 
 
 def get_args():
@@ -65,8 +74,21 @@ def get_args():
     parser.add_argument('--patch_size', default=16, type=int)
     parser.add_argument('--mask_ratio', default=0.9, type=float)
     parser.add_argument('--sun_blocker_until', default='2020-07-01', type=str)
-    parser.add_argument('--sun_blocker_threshold', default=60, type=float)
+    parser.add_argument('--sun_blocker_contrast', default=0.5, type=float)
+    parser.add_argument('--sun_blocker_kernel', default=15, type=int)
     parser.add_argument('--sun_blocker_min_pixels', default=1, type=int)
+    parser.add_argument(
+        '--sun_blocker_circle',
+        default=list(UOH_SKY_CIRCLE),
+        type=float,
+        nargs=3,
+        metavar=('CX', 'CY', 'R'))
+    parser.add_argument(
+        '--sun_blocker_image_rows',
+        default=list(UOH_IMAGE_ROWS),
+        type=float,
+        nargs=2,
+        metavar=('TOP', 'BOTTOM'))
     return parser.parse_args()
 
 
@@ -84,10 +106,16 @@ def build(args):
         tubelet_size=args.tubelet_size,
         patch_size=(args.patch_size, args.patch_size),
         sun_blocker_masking=True,
-        sun_blocker_threshold=args.sun_blocker_threshold,
+        sun_blocker_contrast=args.sun_blocker_contrast,
+        sun_blocker_kernel=args.sun_blocker_kernel,
         sun_blocker_min_pixels=args.sun_blocker_min_pixels,
+        sun_blocker_circle=args.sun_blocker_circle,
+        sun_blocker_image_rows=args.sun_blocker_image_rows,
     )
     transform = DataAugmentationForVideoMAEv2(aug_args)
+    # Draw the frames as stored: cropping the full frame at scale 1 leaves it
+    # unchanged, so the panels line up with the detector and the sky circle.
+    transform.train_augmentation.scales = [1]
     dataset = LMDBVideoMAE(
         lmdb_path=args.lmdb_path,
         new_length=args.num_frames,
@@ -145,11 +173,20 @@ def upsample_grid(grid, patch):
     return np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)
 
 
+def outline(mask):
+    """Pixels on the edge of a [H, W] bool mask."""
+    edge = np.zeros_like(mask)
+    edge[1:] |= mask[1:] != mask[:-1]
+    edge[:, 1:] |= mask[:, 1:] != mask[:, :-1]
+    return edge
+
+
 def render_clip(process_data, encoder_mask, exclude_mask, transform, args):
     frames = to_uint8_frames(process_data, transform)  # [T, H, W, 3]
-    t_total = frames.shape[0]
-    flat = process_data.transpose(0, 1).reshape(t_total * 3, *frames.shape[1:3])
-    dark = transform.sun_blocker_detector.dark_pixels(flat).numpy()  # [T,H,W]
+    t_total, height, width = frames.shape[:3]
+    detector = transform.sun_blocker_detector
+    dark = detector.darkness(frames) > detector.contrast  # [T, H, W]
+    sky = detector.sky_region.mask(width, height)
     grid = args.input_size // args.patch_size
     exclude = np.asarray(exclude_mask, dtype=bool).reshape(-1, grid, grid)
     encoder = np.asarray(encoder_mask, dtype=bool).reshape(-1, grid, grid)
@@ -160,7 +197,9 @@ def render_clip(process_data, encoder_mask, exclude_mask, transform, args):
     for t in shown:
         slot = t // args.tubelet_size
         frame = frames[t]
-        panel_dark = tint(frame, dark[t], (255, 0, 0))
+        panel_dark = tint(frame, dark[t] & sky, (255, 0, 0))
+        panel_dark = tint(panel_dark, dark[t] & ~sky, (0, 128, 255))
+        panel_dark[outline(sky)] = (255, 255, 0)
         panel_excl = tint(frame, upsample_grid(exclude[slot], args.patch_size),
                           (255, 0, 255), alpha=0.5)
         panel_enc = frame.copy()

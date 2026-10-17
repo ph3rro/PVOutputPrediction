@@ -15,6 +15,7 @@ from .masking_generator import (
     TubeMaskingGenerator,
 )
 from .sun_blocker import (
+    SkyRegion,
     SunBlockerDetector,
     clip_has_sun_blocker,
     date_from_stem,
@@ -43,6 +44,9 @@ class DataAugmentationForVideoMAEv2(object):
             ToTorchFormatTensor(div=div),
             normalize,
         ])
+        # The steps after the crop, for clips whose sun-blocker masks are
+        # cropped together with the frames (see augment_with_blocker).
+        self.to_tensor = transforms.Compose(self.transform.transforms[1:])
         if args.mask_type == 'tube':
             self.encoder_mask_map_generator = TubeMaskingGenerator(
                 args.window_size, args.mask_ratio)
@@ -65,10 +69,12 @@ class DataAugmentationForVideoMAEv2(object):
                 num_frames=args.num_frames,
                 tubelet_size=args.tubelet_size,
                 patch_size=args.patch_size,
-                threshold=args.sun_blocker_threshold,
+                contrast=args.sun_blocker_contrast,
+                kernel=args.sun_blocker_kernel,
                 min_pixels=args.sun_blocker_min_pixels,
-                mean=self.input_mean,
-                std=self.input_std)
+                sky_region=SkyRegion(
+                    circle=args.sun_blocker_circle,
+                    rows=args.sun_blocker_image_rows))
 
     def __call__(self, images, sun_blocker=False):
         """Augment a clip and sample its masks.
@@ -83,12 +89,13 @@ class DataAugmentationForVideoMAEv2(object):
             same layout as the encoder mask ([frames // tubelet_size,
             patches per frame]).
         """
-        process_data, _ = self.transform(images)
         sun_blocker_map = None
         if self.sun_blocker_detector is not None and sun_blocker:
-            tubelet_mask = self.sun_blocker_detector(process_data)
-            sun_blocker_map = tubelet_mask.reshape(
-                tubelet_mask.shape[0], -1).numpy()
+            process_data, blocker = self.augment_with_blocker(images)
+            tubelet_mask = self.sun_blocker_detector.tubelets(blocker)
+            sun_blocker_map = tubelet_mask.reshape(tubelet_mask.shape[0], -1)
+        else:
+            process_data, _ = self.transform(images)
         if sun_blocker_map is None:
             encoder_mask_map = self.encoder_mask_map_generator()
         else:
@@ -106,6 +113,25 @@ class DataAugmentationForVideoMAEv2(object):
             sun_blocker_map = np.zeros(encoder_mask_map.shape, dtype=bool)
         return (process_data, encoder_mask_map, decoder_mask_map,
                 sun_blocker_map)
+
+    def augment_with_blocker(self, images):
+        """Augment a clip and locate the sun blocker in it.
+
+        The blocker is found on the stored frames. Its per-frame masks then
+        take the same random crop and resize as the frames, so the returned
+        ``[T, H, W]`` bool ``blocker`` lines up with ``process_data``.
+        """
+        frames, label = images
+        dark = self.sun_blocker_detector.dark_pixels(
+            np.stack([np.asarray(frame) for frame in frames]))
+        masks = [
+            Image.fromarray(mask) for mask in dark.astype(np.uint8) * 255
+        ]
+        cropped, _ = self.train_augmentation((list(frames) + masks, label))
+        n = len(frames)
+        blocker = np.stack([np.asarray(mask) >= 128 for mask in cropped[n:]])
+        process_data, _ = self.to_tensor((cropped[:n], label))
+        return process_data, blocker
 
     def __repr__(self):
         repr = "(DataAugmentationForVideoMAEv2,\n"

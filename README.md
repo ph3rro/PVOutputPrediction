@@ -130,18 +130,22 @@ cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
 
 ### Sun-blocker masking (UoH)
 
-Until 2020-07-01 the UoH camera carried a sun blocker (a black disc on a thin black arm). Add `--sun_blocker_masking` to the pretraining command to keep the model from learning to reconstruct it. For every clip whose LMDB video stem is dated on or before `--sun_blocker_until` (default `2020-07-01`), the augmented frames are thresholded at `--sun_blocker_threshold` (default 60 on a 0-255 gray scale) and every tubelet (2 frames x 16 x 16 pixels) with at least `--sun_blocker_min_pixels` (default 1) dark pixels is
+Until 2020-07-01 the UoH camera carried a sun blocker (a black disc on a thin black arm). Add `--sun_blocker_masking` to the pretraining command to keep the model from learning to reconstruct it. For every clip whose LMDB video stem is dated on or before `--sun_blocker_until` (default `2020-07-01`), the detector looks for pixels that are much darker than the sky around them, and every tubelet (2 frames x 16 x 16 pixels) with at least `--sun_blocker_min_pixels` (default 1) such pixels is
 
 - always placed in the encoder mask (the random tube mask is drawn around it, so the number of visible tokens is unchanged), and
 - excluded from the decoder's reconstruction loss.
 
-Note that any other near-black pixels in those clips (the black padding above and below the frame, the corners outside the fisheye disc, the tree line) are masked the same way; clips after the cutoff are untouched. The flag needs `--lmdb_path`, since the clip date is read from the video stem (`camera7_2019-06-20`). Training logs and TensorBoard gain a `sun_blocker_frac` value, the fraction of tubelets excluded per batch. The extra work is a threshold and a per-tubelet count in the DataLoader workers, a few milliseconds per clip, and the GPU step is unchanged.
+The detector works on the stored frames, before augmentation, and its masks are then cropped together with the frames. A pixel counts when it is at least `--sun_blocker_contrast` (default 0.5) darker than the sky around it, judged over a `--sun_blocker_kernel` x `--sun_blocker_kernel` neighbourhood (default 15 px, wider than the disc, which is about 14 px across). This catches the disc and the thin arm in clear, broken-cloud and overcast skies, including a disc that sun glare lights up to mid-gray, while wide stretches of dark sky do not count. Narrow dark gaps between bright clouds can still be flagged.
 
-To check the threshold on your data before training, render a few clips:
+Only pixels inside the sky region count: the circle `--sun_blocker_circle CX CY R`, minus the black rows that `build_uoh_lmdb.py` pads above and below the camera image (`--sun_blocker_image_rows TOP BOTTOM`), both as fractions of the stored frame. The defaults, `0.502 0.460 0.472` and `0.104 0.896`, put the circle at (112, 103) with a radius of 106 px in the 224x224 UoH frames, 5 px inside the dark rim around the sky, and keep rows 23-200. The rim, the black corners and the padding are ignored. To count pixels anywhere in the frame, pass `--sun_blocker_circle 0.5 0.5 1 --sun_blocker_image_rows 0 1`.
+
+Clips after the cutoff are untouched. The flag needs `--lmdb_path`, since the clip date is read from the video stem (`camera7_2019-06-20`). Training logs and TensorBoard gain a `sun_blocker_frac` value, the fraction of tubelets excluded per batch. The detector runs in the DataLoader workers, and the GPU step is unchanged.
+
+To check the detector and the sky region on your data before training, render a few clips:
 
 ```bash
 cd /home/ubuntu/PVOutputPrediction/models/VideoMAEv2
 python visualize_sun_blocker_mask.py --lmdb_path /home/ubuntu/PVOutputPrediction/preprocessing/data/uoh_lmdb_minute_224/frames.lmdb --clip_stride_minutes 2 --stem_contains 2018-03-16 --num_clips 4 --out_dir sun_blocker_vis
 ```
 
-Each PNG shows the augmented frame, the dark pixels in red, the excluded tubelets in magenta, and the encoder input with hidden patches blacked out.
+Each PNG shows the stored frame (without the random crop, so it lines up with the sky circle), the blocker pixels in red (blue where they lie outside the sky region and are ignored, with the region's edge in yellow), the excluded tubelets in magenta, and the encoder input with hidden patches blacked out. The visualizer takes the same `--sun_blocker_*` flags as pretraining, so you can try other settings before training.

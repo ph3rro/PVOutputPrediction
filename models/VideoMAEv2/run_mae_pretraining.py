@@ -25,6 +25,7 @@ from timm.models import create_model
 import models  # noqa: F401
 import utils
 from dataset import build_pretraining_dataset
+from dataset.sun_blocker import UOH_IMAGE_ROWS, UOH_SKY_CIRCLE
 from engine_for_pretraining import train_one_epoch
 from optim_factory import create_optimizer
 from utils import NativeScalerWithGradNormCount as NativeScaler
@@ -102,11 +103,11 @@ def get_args():
         action='store_true',
         default=False,
         help=(
-            'Detect the dark UoH sun blocker (disc and arm) in clips dated '
-            'on or before --sun_blocker_until. Tubelets containing it are '
-            'always masked from the encoder and left out of the '
-            'reconstruction loss. Requires --lmdb_path; clip dates come '
-            'from the LMDB video stems.'))
+            'Detect the UoH sun blocker (disc and arm) in clips dated on or '
+            'before --sun_blocker_until, as pixels much darker than the sky '
+            'around them. Tubelets containing it are always masked from the '
+            'encoder and left out of the reconstruction loss. Requires '
+            '--lmdb_path; clip dates come from the LMDB video stems.'))
     parser.add_argument(
         '--sun_blocker_until',
         default='2020-07-01',
@@ -115,12 +116,22 @@ def get_args():
             'Last date (YYYY-MM-DD, inclusive) on which the sun blocker is '
             'present in the UoH data.'))
     parser.add_argument(
-        '--sun_blocker_threshold',
-        default=60,
+        '--sun_blocker_contrast',
+        default=0.5,
         type=float,
         help=(
-            'Gray level in [0, 255]; augmented pixels below it count as '
-            'sun-blocker pixels.'))
+            'A pixel counts as sun blocker when it is at least this fraction '
+            'darker than the sky around it (0-1). Lower catches more of the '
+            'thin arm and more dark gaps between clouds.'))
+    parser.add_argument(
+        '--sun_blocker_kernel',
+        default=15,
+        type=int,
+        help=(
+            'Odd size, in stored-frame pixels, of the neighbourhood that '
+            'gives "the sky around" a pixel. Dark features too narrow to '
+            'hold a square of this size count; the UoH disc is about 14 px '
+            'across in 224x224 frames.'))
     parser.add_argument(
         '--sun_blocker_min_pixels',
         default=1,
@@ -128,6 +139,28 @@ def get_args():
         help=(
             'A tubelet is masked when it contains at least this many '
             'sun-blocker pixels.'))
+    parser.add_argument(
+        '--sun_blocker_circle',
+        default=list(UOH_SKY_CIRCLE),
+        type=float,
+        nargs=3,
+        metavar=('CX', 'CY', 'R'),
+        help=(
+            'Sky circle in the stored LMDB frames: centre x, centre y and '
+            'radius as fractions of the frame side. Pixels outside it (the '
+            'dark camera rim and the black corners) are ignored. The default '
+            'sits just inside the rim of UoH frames written by '
+            'build_uoh_lmdb.py.'))
+    parser.add_argument(
+        '--sun_blocker_image_rows',
+        default=list(UOH_IMAGE_ROWS),
+        type=float,
+        nargs=2,
+        metavar=('TOP', 'BOTTOM'),
+        help=(
+            'Rows of the stored LMDB frames that hold camera image, as '
+            'fractions of the frame height. Pixels in the black padding '
+            'above and below are ignored.'))
 
     # Optimizer parameters
     parser.add_argument(
